@@ -108,6 +108,9 @@ final class Bridge {
             var it = Item(kind: .clip, text: text, sourceApp: req["app"] as? String, sourceBundle: req["bundle"] as? String,
                           hash: store.vault.fingerprint(Data(text.utf8)))
             it.ctype = Classifier.classify(text)
+            if let p = req["image"] as? String, let png = FileManager.default.contents(atPath: p), let file = store.saveImage(png) {
+                it.ctype = .image; it.imageFile = file; it.hash = store.vault.fingerprint(png)
+            }
             monitor?.ingest(&it)
             reply(["ok": true, "id": monitor?.lastCapturedId ?? "", "type": it.ctype.rawValue])
         case "debug.kept":

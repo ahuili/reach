@@ -1,0 +1,7 @@
+{
+  "name": "reach-promo",
+  "private": true,
+  "type": "module",
+  "description": "手边 Reach 介绍视频：真实的手边界面截图（演示数据）+ 示意桌面，用本机 Chrome 逐帧渲染，ffmpeg 合成",
+  "scripts": { "render": "node render.mjs" }
+}

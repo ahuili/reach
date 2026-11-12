@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>手边 Reach 介绍</title>
+<!--
+  手边 Reach 介绍视频的画面。
+  侧栏是真实的手边界面截图（测试模式 + 虚构的演示数据，见 src/seed.py、src/snaps.py）；
+  桌面、终端、聊天窗口是示意，不含任何真实屏幕内容。
+  画面是时间 t（秒）的纯函数：window.renderAt(t)。render.mjs 逐帧调用并截图。
+  浏览器里直接打开会自动播放；?t=12.5 停在某一时刻。
+-->
+<style>
+  :root { --amber: #f5b333; --ink: #2a1c03; --font: -apple-system, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; font-family: var(--font); }
+  #stage { position: absolute; inset: 0; overflow: hidden; }
+  .wall { position: absolute; inset: 0;
+    background: radial-gradient(1100px 700px at 18% 18%, #5b4320 0%, transparent 60%),
+                radial-gradient(1000px 800px at 85% 90%, #3a2f52 0%, transparent 60%),
+                linear-gradient(160deg, #1d1a22 0%, #2a2430 55%, #17161b 100%); }
+  .menubar { position: absolute; left: 0; right: 0; top: 0; height: 30px; background: rgba(20,18,24,.55); backdrop-filter: blur(20px);
+    display: flex; align-items: center; padding: 0 18px; gap: 22px; font-size: 14px; color: #e8e4ee; font-weight: 500; }
+  .menubar .sp { flex: 1; }
+  .menubar .clock { font-variant-numeric: tabular-nums; }
+
+  .win { position: absolute; border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.08); }
+  .win .bar { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: 13px; color: #aaa; white-space: nowrap; }
+  .dots { display: flex; gap: 8px; } .dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ff5f57 } .dots i:nth-child(2) { background: #febc2e } .dots i:nth-child(3) { background: #28c840 }
+  .win .ttl { flex: 1; text-align: center; margin-right: 60px; }
+
+  #term { left: 100px; top: 110px; width: 1040px; height: 640px; background: #141418; }
+  #term .bar { background: #222228; border-bottom: 1px solid #0c0c0f; }
+  #term pre { padding: 18px 22px; font: 19px/30px "SF Mono", Menlo, monospace; color: #d4d4de; white-space: pre-wrap; }
+  .p { color: #f5b333; } .g { color: #7ee2a8; } .d { color: #7b7b8a; } .b { color: #8ab4ff; } .hl { background: rgba(245,179,51,.22); color: #ffd98a; border-radius: 4px; }
+  .caret { display: inline-block; width: 11px; height: 22px; background: #d4d4de; vertical-align: -4px; }
+
+  #chat { left: 250px; top: 150px; width: 860px; height: 580px; background: #f4f3f6; }
+  #chat .bar { background: #e9e7ee; color: #555; border-bottom: 1px solid #dcd9e2; }
+  #chat .msgs { position: absolute; top: 36px; left: 0; right: 0; bottom: 150px; padding: 22px 26px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { display: flex; gap: 12px; align-items: flex-start; font-size: 18px; color: #222; }
+  .msg .av { width: 40px; height: 40px; border-radius: 10px; flex: none; }
+  .msg .bub { background: #fff; padding: 10px 14px; border-radius: 10px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,.06); max-width: 600px; white-space: pre-wrap; }
+  .msg.me { flex-direction: row-reverse; } .msg.me .bub { background: #ffe3a3; }
+  #chat .input { position: absolute; left: 0; right: 0; bottom: 0; height: 150px; background: #fff; border-top: 1px solid #e3e0e8; padding: 16px 22px; font-size: 18px; color: #222; line-height: 1.55; white-space: pre-wrap; }
+
+  #side { position: absolute; top: 38px; width: 452px; height: 1032px; border-radius: 16px; overflow: hidden;
+    box-shadow: 0 30px 90px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.12); background: #2b2b2e; }
+  #side img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #handle { position: absolute; right: 0; width: 6px; height: 120px; top: 480px; border-radius: 4px 0 0 4px; background: rgba(245,179,51,.55); }
+
+  #cursor { position: absolute; width: 30px; height: 44px; left: 0; top: 0; z-index: 50; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+  .ring { position: absolute; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; border: 3px solid var(--amber); opacity: 0; z-index: 49; }
+  .key { position: absolute; z-index: 48; padding: 10px 18px; border-radius: 12px; background: rgba(20,18,24,.85); color: #fff; font-size: 30px; font-weight: 600;
+    box-shadow: 0 10px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.12); opacity: 0; white-space: nowrap; }
+  .key b { color: var(--amber); }
+
+  #cap { position: absolute; left: 100px; top: 800px; width: 1200px; z-index: 40; }
+  #cap h1 { font-size: 62px; font-weight: 700; color: #fff; letter-spacing: 1px; text-shadow: 0 4px 24px rgba(0,0,0,.5); }
+  #cap p { margin-top: 14px; font-size: 30px; color: rgba(255,255,255,.75); }
+  #cap p b { color: var(--amber); font-weight: 600; }
+  .stepdots { position: absolute; left: 100px; top: 770px; display: flex; gap: 10px; z-index: 40; }
+  .stepdots i { width: 28px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.2); }
+  .stepdots i.on { background: var(--amber); }
+
+  .card { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff;
+    background: radial-gradient(900px 600px at 50% 40%, #3b2c12 0%, #141216 70%); }
+  .card img { width: 220px; height: 220px; }
+  .card h1 { margin-top: 26px; font-size: 92px; font-weight: 800; letter-spacing: 4px; }
+  .card h1 span { color: var(--amber); }
+  .card p { margin-top: 16px; font-size: 36px; color: rgba(255,255,255,.75); }
+  .card code { margin-top: 44px; font: 32px/1 "SF Mono", Menlo, monospace; padding: 22px 34px; border-radius: 14px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); color: #ffd98a; }
+  .card .url { margin-top: 26px; font-size: 30px; color: rgba(255,255,255,.7); }
+  .card .tags { margin-top: 30px; display: flex; gap: 14px; }
+  .card .tags span { padding: 8px 18px; border-radius: 30px; font-size: 24px; background: rgba(245,179,51,.14); color: #ffd98a; border: 1px solid rgba(245,179,51,.3); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="wall"></div>
+  <div class="menubar"><b></b><span>访达</span><span>文件</span><span>编辑</span><span>显示</span><span class="sp"></span><span class="clock">周三 14:32</span></div>
+
+  <div class="win" id="chat">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">首页改版 · 项目群（示意）</div></div>
+    <div class="msgs">
+      <div class="msg"><div class="av" style="background:#8ab4ff"></div><div class="bub">今天下班前同步一下进展？</div></div>
+      <div class="msg"><div class="av" style="background:#7ee2a8"></div><div class="bub">把本地启动命令和刚才那个报错也发群里，我帮忙看看</div></div>
+      <div class="msg me" id="sent" style="opacity:0"><div class="av" style="background:#f5b333"></div><div class="bub" id="sentText"></div></div>
+    </div>
+    <div class="input" id="chatInput"></div>
+  </div>
+
+  <div class="win" id="term">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">shop-web — zsh</div></div>
+    <pre id="termText"></pre>
+  </div>
+
+  <div id="handle"></div>
+  <div id="side"><img id="sideImg" alt=""></div>
+
+  <div class="stepdots" id="dots"></div>
+  <div id="cap"><h1 id="capH"></h1><p id="capP"></p></div>
+  <div class="key" id="key"></div>
+  <div class="ring" id="ring"></div>
+  <svg id="cursor" viewBox="0 0 30 44"><path d="M3 2 L3 34 L11 26 L17 40 L22 38 L16 24 L27 24 Z" fill="#fff" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>
+
+  <div class="card" id="intro">
+    <img src="../assets/icon-1024.png" alt="">
+    <h1>手边 <span>Reach</span></h1>
+    <p>复制过的、常用的，都在屏幕边上</p>
+  </div>
+  <div class="card" id="outro">
+    <img src="../assets/icon-1024.png" alt="">
+    <h1>手边 <span>Reach</span></h1>
+    <div class="tags"><span>剪贴板历史</span><span>留存笔记</span><span>本地加密密钥库</span><span>给 Agent 用</span></div>
+    <code id="brew">brew install --cask ahuili/tap/reach</code>
+    <div class="url">免费开源 · macOS 14+ · github.com/ahuili/reach</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const out = x => 1 - Math.pow(1 - x, 3);
+const lerp = (a, b, p) => a + (b - a) * p;
+const typed = (s, p) => [...s].slice(0, Math.round([...s].length * clamp(p))).join('');
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// 时间轴（秒）
+const T = { intro: [0, 3.6], edge: [3.6, 10.5], paste: [10.5, 17.5], shot: [17.5, 27], basket: [27, 34.5], kept: [34.5, 40.5], part: [40.5, 47], agent: [47, 55], outro: [55, 61] };
+window.DURATION = 61;
+const scenes = ['edge', 'paste', 'shot', 'basket', 'kept', 'part', 'agent'];
+const caps = {
+  edge:   ['碰一下屏幕右边，复制历史就出来了', '屏幕边有一条细细的把手；也可以按 <b>⇧⌘V</b>'],
+  paste:  ['选中，回车，贴进刚才的窗口', '看着目标窗口贴：进终端<b>自动去掉格式</b>'],
+  shot:   ['截图贴进终端，自动变成文件路径', 'Claude Code、Codex 这类命令行 Agent <b>直接就能读图</b>'],
+  basket: ['空格多选，攒一篮子一次贴完', '图片、命令、聊天记录，<b>按顺序合成一段</b>'],
+  kept:   ['常用的留下来：账号、话术、密钥', '本机加密存放，<b>密钥自动打码</b>，按文件夹分好'],
+  part:   ['一条笔记，想贴哪部分就贴哪部分', '回车贴整条；<b>→</b> 只贴网址、账号或密码；<b>⌥↩</b> 填登录框'],
+  agent:  ['Agent 要用密钥？先问你', '你点了允许，值由手边<b>直接写进 .env，不经过对话</b>'],
+};
+$('dots').innerHTML = scenes.map(() => '<i></i>').join('');
+const shots = ['recent-0','recent-1','recent-img-opts','pick-1','pick-2','pick-3','kept-0','kept-1','kept-2','kept-3','search','search-opts','approve'];
+for (const s of shots) { const i = new Image(); i.src = `shots/${s}.png`; }
+
+const SIDE_OPEN = 1920 - 452 - 14, SIDE_SHUT = 1960;
+const HANDLE = [1912, 540];
+
+function cursor(x, y, show = 1) { const c = $('cursor'); c.style.transform = `translate(${x}px, ${y}px)`; c.style.opacity = show; }
+function ring(x, y, p) { const r = $('ring'); r.style.left = x + 'px'; r.style.top = y + 'px'; r.style.opacity = p > 0 && p < 1 ? 1 - p : 0; r.style.transform = `scale(${.5 + p})`; }
+function key(html, x, y, op) { const k = $('key'); k.innerHTML = html; k.style.left = x + 'px'; k.style.top = y + 'px'; k.style.opacity = op; k.style.transform = `translateY(${(1 - op) * 10}px)`; }
+function side(x, img) { $('side').style.left = x + 'px'; if (img && !$('sideImg').src.endsWith(img + '.png')) $('sideImg').src = `shots/${img}.png`; }
+// 把侧栏截图里的坐标（截图像素 768×1752）换成画面坐标
+const sx = px => SIDE_OPEN + px * 452 / 768, sy = py => 38 + py * 1032 / 1752;
+function path(t, pts) { // pts: [[time, x, y], ...]
+  if (t <= pts[0][0]) return pts[0].slice(1);
+  for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) { const p = ease(seg(t, pts[i - 1][0], pts[i][0])); return [lerp(pts[i - 1][1], pts[i][1], p), lerp(pts[i - 1][2], pts[i][2], p)]; }
+  return pts[pts.length - 1].slice(1);
+}
+
+const PROMPT = '<span class="p">~/code/shop-web</span> <span class="d">❯</span> ';
+const SHOT_PATH = '~/Library/Caches/Reach/shots/截图-45d376d6.png';
+
+window.renderAt = function (t) {
+  // 开头、结尾卡片
+  $('intro').style.opacity = 1 - seg(t, 3.0, 3.6);
+  $('intro').querySelector('img').style.transform = `scale(${.85 + .15 * out(seg(t, 0, 1.2))})`;
+  $('outro').style.opacity = seg(t, 55, 55.7);
+  $('outro').querySelector('code').style.opacity = seg(t, 56.2, 56.9);
+
+  // 字幕
+  const sc = scenes.find(s => t >= T[s][0] && t < T[s][1]);
+  if (sc) {
+    const [a, b] = T[sc]; const op = Math.min(seg(t, a + .1, a + .6), 1 - seg(t, b - .45, b - .05));
+    $('capH').textContent = caps[sc][0]; $('capP').innerHTML = caps[sc][1];
+    $('cap').style.opacity = op; $('cap').style.transform = `translateY(${(1 - out(seg(t, a + .1, a + .7))) * 24}px)`;
+    [...$('dots').children].forEach((d, i) => d.classList.toggle('on', i <= scenes.indexOf(sc)));
+    $('dots').style.opacity = 1;
+  } else { $('cap').style.opacity = 0; $('dots').style.opacity = 0; }
+
+  // 默认状态
+  let sideX = SIDE_SHUT, img = 'recent-0', cur = [900, 600], curShow = 0, termFront = true, keyOp = 0;
+  let term = PROMPT + '<span class="caret"></span>';
+  let chatIn = '', sentOp = 0, sentText = '';
+  let handleW = 6, handleOp = 1;
+  ring(0, 0, -1);
+
+  // ① 碰屏幕边 → 侧栏滑出
+  if (t < T.paste[0]) {
+    cur = path(t, [[3.6, 760, 520], [5.4, HANDLE[0] + 4, HANDLE[1]]]);
+    curShow = seg(t, 3.7, 4.1);
+    const hov = seg(t, 5.2, 5.5); handleW = 6 + 6 * hov;
+    const op = out(seg(t, 5.7, 6.4)); sideX = lerp(SIDE_SHUT, SIDE_OPEN, op);
+    if (t > 6.4) { cur = path(t, [[6.4, HANDLE[0] + 4, HANDLE[1]], [7.6, sx(400), sy(480)]]); }
+    img = 'recent-0';
+  }
+  // ② 选中 npm 那条 → 回车 → 贴进终端
+  else if (t < T.shot[0]) {
+    curShow = 0; sideX = SIDE_OPEN;
+    img = t < 12.2 ? 'recent-0' : 'recent-1';
+    keyOp = Math.min(seg(t, 11.4, 11.6), 1 - seg(t, 12.0, 12.2)); if (keyOp > 0) key('<b>↓</b> 选下一条', SIDE_OPEN - 260, sy(560), keyOp);
+    const k2 = Math.min(seg(t, 13.0, 13.2), 1 - seg(t, 13.8, 14.0)); if (k2 > 0) key('<b>↩</b> 贴', SIDE_OPEN - 140, sy(560), k2);
+    sideX = lerp(SIDE_OPEN, SIDE_SHUT, ease(seg(t, 13.6, 14.1)));
+    const cmd = 'npm run dev -- --port 3001';
+    if (t > 14.1) {
+      term = PROMPT + `<span class="hl">${esc(cmd)}</span>`;
+      if (t > 15.0) term = PROMPT + esc(cmd) + '\n\n<span class="g">▲ Next.js 14.2</span>\n  - Local:   <span class="b">http://localhost:3001</span>\n<span class="g">✓</span> Ready in 1.8s';
+      else term += '<span class="caret"></span>';
+    }
+  }
+  // ③ 截图 → 存成文件贴路径 → Agent 读图
+  else if (t < T.basket[0]) {
+    const ask = '<span class="p">claude</span> <span class="d">›</span> 页面报错了，帮我看看这张截图 ';
+    term = '<span class="d">… 开发服务器在另一个窗口跑着</span>\n\n' + PROMPT + 'claude\n\n' + ask;
+    sideX = lerp(SIDE_SHUT, SIDE_OPEN, out(seg(t, 18.6, 19.2)));
+    sideX = lerp(sideX, SIDE_SHUT, ease(seg(t, 22.4, 22.9)));
+    img = t < 20.2 ? 'recent-0' : 'recent-img-opts';
+    const k1 = Math.min(seg(t, 19.6, 19.8), 1 - seg(t, 20.2, 20.4)); if (k1 > 0) key('<b>→</b> 怎么贴', SIDE_OPEN - 200, sy(560), k1);
+    const k2 = Math.min(seg(t, 21.2, 21.4), 1 - seg(t, 22.2, 22.4)); if (k2 > 0) key('<b>2</b> 存成文件，贴路径', SIDE_OPEN - 330, sy(196), k2);
+    if (t < 22.9) term += '<span class="caret"></span>';
+    else {
+      term += `<span class="hl">${SHOT_PATH}</span>`;
+      if (t > 23.8) term += '\n\n<span class="d">⏺ Read(截图-45d376d6.png)</span>';
+      if (t > 24.6) term += '\n<span class="d">⏺</span> 报错在 <span class="b">OrderList.tsx:42</span>：接口还没返回时 <span class="p">orders.items</span> 是 undefined，\n  加一个空数组兜底就好：<span class="g">(orders?.items ?? []).map(…)</span>';
+    }
+  }
+  // ④ 篮子
+  else if (t < T.kept[0]) {
+    termFront = false;
+    sideX = lerp(SIDE_SHUT, SIDE_OPEN, out(seg(t, 27.4, 28.0)));
+    img = t < 29.0 ? 'recent-0' : t < 29.8 ? 'pick-1' : t < 30.6 ? 'pick-2' : 'pick-3';
+    const kSp = Math.min(seg(t, 28.8, 29.0), 1 - seg(t, 30.6, 30.8)); if (kSp > 0) key('<b>空格</b> 放进篮子', SIDE_OPEN - 270, sy(560), kSp);
+    const kGo = Math.min(seg(t, 31.2, 31.4), 1 - seg(t, 31.9, 32.1)); if (kGo > 0) key('<b>⌘↩</b> 合成一段贴', SIDE_OPEN - 290, sy(1620), kGo);
+    sideX = lerp(sideX, SIDE_SHUT, ease(seg(t, 31.9, 32.4)));
+    const bundle = '[图片] 订单管理·本地开发 报错截图\nnpm run dev -- --port 3001\n周五前把首页改版的稿子发我，顺便把埋点文档带上';
+    if (t > 32.4) chatIn = bundle;
+    if (t > 33.4) { chatIn = ''; sentOp = seg(t, 33.4, 33.7); sentText = bundle.replace('[图片] 订单管理·本地开发 报错截图', '🖼 报错截图.png'); }
+  }
+  // ⑤ 留存
+  else if (t < T.part[0]) {
+    termFront = false; sentOp = 1; sentText = '🖼 报错截图.png\nnpm run dev -- --port 3001\n周五前把首页改版的稿子发我，顺便把埋点文档带上';
+    sideX = lerp(SIDE_SHUT, SIDE_OPEN, out(seg(t, 34.8, 35.4)));
+    img = t < 35.8 ? 'recent-0' : t < 36.9 ? 'kept-0' : t < 37.7 ? 'kept-1' : t < 38.5 ? 'kept-2' : 'kept-3';
+    const kT = Math.min(seg(t, 35.6, 35.8), 1 - seg(t, 36.4, 36.6)); if (kT > 0) key('<b>Tab</b> 切到留存', SIDE_OPEN - 270, sy(110), kT);
+  }
+  // ⑥ 只贴一部分
+  else if (t < T.agent[0]) {
+    termFront = false; sentOp = 1; sentText = '🖼 报错截图.png\nnpm run dev -- --port 3001\n周五前把首页改版的稿子发我，顺便把埋点文档带上';
+    sideX = SIDE_OPEN;
+    img = t < 42.6 ? 'search' : 'search-opts';
+    const kQ = Math.min(seg(t, 40.8, 41.0), 1 - seg(t, 42.0, 42.2)); if (kQ > 0) key('搜 <b>后台</b>', SIDE_OPEN - 170, sy(40), kQ);
+    const kR = Math.min(seg(t, 42.3, 42.5), 1 - seg(t, 43.0, 43.2)); if (kR > 0) key('<b>→</b> 只贴一部分', SIDE_OPEN - 250, sy(200), kR);
+    // 在选项上依次扫过
+    if (t > 43.2) { curShow = seg(t, 43.2, 43.5); cur = path(t, [[43.2, sx(500), sy(500)], [44.2, sx(330), sy(256)], [45.2, sx(330), sy(316)], [46.0, sx(330), sy(376)]]); }
+  }
+  // ⑦ Agent 审批
+  else if (t < T.outro[0]) {
+    const ask = '<span class="p">claude</span> <span class="d">›</span> 把 OpenAI 的 key 配到 .env 里';
+    term = PROMPT + 'claude\n\n' + ask + '\n\n<span class="d">⏺ reach.write_env(OPENAI_API_KEY)</span>\n  <span class="d">等你在侧栏里点头…</span>';
+    sideX = lerp(SIDE_SHUT, SIDE_OPEN, out(seg(t, 48.2, 48.8)));
+    img = 'approve';
+    curShow = seg(t, 49.2, 49.5);
+    cur = path(t, [[49.2, 1300, 700], [50.6, sx(632), sy(486)]]);
+    ring(sx(632), sy(486), seg(t, 50.8, 51.4));
+    sideX = lerp(sideX, SIDE_SHUT, ease(seg(t, 51.4, 51.9)));
+    if (t > 51.9) { curShow = 1 - seg(t, 51.9, 52.2);
+      term = PROMPT + 'claude\n\n' + ask + '\n\n<span class="d">⏺ reach.write_env(OPENAI_API_KEY)</span>\n  <span class="g">✓ 已写入 .env</span>  <span class="d">值由手边直接写文件，没有经过对话</span>';
+      if (t > 52.8) term += '\n<span class="d">⏺</span> 配好了。<span class="p">.env</span> 已经在 .gitignore 里，不会被提交。'; }
+  }
+  else { curShow = 0; }
+
+  side(sideX, img);
+  // 侧栏打开时，背后的窗口虚一点，视线集中在侧栏
+  const blur = clamp((SIDE_SHUT - sideX) / (SIDE_SHUT - SIDE_OPEN)) * 3;
+  for (const w of ['term', 'chat']) $(w).style.filter = `blur(${blur}px) brightness(${1 - blur * .06})`;
+  $('handle').style.width = handleW + 'px'; $('handle').style.opacity = sideX < 1900 ? 0 : handleOp;
+  $('handle').style.background = handleW > 6 ? '#f5b333' : 'rgba(245,179,51,.55)';
+  $('term').style.zIndex = termFront ? 3 : 1; $('chat').style.zIndex = termFront ? 1 : 3;
+  $('termText').innerHTML = term;
+  $('chatInput').textContent = chatIn; $('chatInput').style.background = chatIn ? '#fffaf0' : '#fff';
+  $('sent').style.opacity = sentOp; $('sentText').textContent = sentText;
+  cursor(cur[0], cur[1], curShow);
+  if (!keyOp) { const k = $('key'); if (!k.dataset.keep) {} }
+};
+// 清掉没用到的提示键
+const _r = window.renderAt; window.renderAt = t => { $('key').style.opacity = 0; _r(t); };
+
+const q = new URLSearchParams(location.search);
+if (q.has('t')) renderAt(+q.get('t'));
+else if (!q.has('render')) { const t0 = performance.now(); (function loop() { renderAt(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+<!doctype html><meta charset=utf-8><style>body{margin:0;width:880px;height:560px;font-family:-apple-system,"PingFang SC";background:#f6f6f8}
+.bar{height:44px;background:#fff;border-bottom:1px solid #e5e5ea;display:flex;align-items:center;padding:0 18px;gap:10px;font-weight:600}
+.dot{width:10px;height:10px;border-radius:50%;background:#34c759}.card{margin:22px;background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 3px #0001}
+.row{height:12px;border-radius:6px;background:#ececf1;margin:12px 0}.err{position:absolute;left:150px;top:150px;width:580px;background:#fff;border-radius:12px;box-shadow:0 20px 60px #0003;border:1px solid #f2c4c0;overflow:hidden}
+.eh{background:#fdecea;color:#b3261e;padding:12px 16px;font-weight:700}.eb{padding:14px 16px;font:13px/20px Menlo,monospace;color:#333}</style>
+<div class=bar><span class=dot></span>订单管理 · 本地开发</div>
+<div class=card><div class=row style="width:40%"></div><div class=row></div><div class=row style="width:85%"></div><div class=row style="width:70%"></div></div>
+<div class=card><div class=row style="width:30%"></div><div class=row></div><div class=row style="width:60%"></div></div>
+<div class=err><div class=eh>Unhandled Runtime Error</div><div class=eb>TypeError: Cannot read properties of undefined (reading 'map')<br><br>src/components/OrderList.tsx (42:18)<br>&nbsp;&nbsp;40 | return (<br>&gt; 42 |&nbsp;&nbsp;{orders.items.map(o =&gt; &lt;Row key={o.id} /&gt;)}</div></div>

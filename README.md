@@ -17,6 +17,12 @@
 </p>
 
 <p align="center">
+  <img src="assets/demo.gif" width="860" alt="手边 Reach 演示">
+  <br>
+  <a href="https://github.com/ahuili/reach/raw/main/assets/Reach-intro.mp4">▶ 看完整介绍视频（1 分钟）</a>
+</p>
+
+<p align="center">
   <img src="assets/screens.png" width="860" alt="最近复制、留存、只贴一部分">
 </p>
 
@@ -150,6 +156,7 @@ Sources/ReachCore     加密存储、密钥识别、内容分类、Markdown 转�
 Sources/Reach         App：剪贴板监听、粘贴、侧栏界面、屏幕边把手、批准流程、自动整理、设置
 Sources/reachctl      命令行和 MCP 服务（打包在 Reach.app/Contents/MacOS/reachctl，装到 PATH 时叫 reach）
 Sources/ReachSelfTest 自测（CommandLineTools 没有 XCTest）
+promo/                介绍视频：真实的侧栏截图（测试模式 + 演示数据）+ 示意桌面，逐帧渲染
 scripts/              build-app.sh 构建，release.sh 打包发布，install.sh 一行安装，make-cert.sh 建签名证书，make-icon.swift 画图标
 ```
 
