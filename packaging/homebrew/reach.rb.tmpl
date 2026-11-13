@@ -20,8 +20,15 @@ cask "reach" do
 
   # 还没有 Apple 公证：去掉隔离标记，否则 macOS 会拦着不让打开
   reach_app = "#{appdir}/Reach.app"
-  postflight_steps do
-    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", reach_app], must_succeed: false
+  # Homebrew 7 起用 postflight_steps；更早的版本没有它，只认 postflight 块
+  if respond_to?(:postflight_steps)
+    postflight_steps do
+      run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", reach_app], must_succeed: false
+    end
+  else
+    postflight do
+      system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", reach_app], must_succeed: false
+    end
   end
 
   uninstall quit: "{{BUNDLE_ID}}"
