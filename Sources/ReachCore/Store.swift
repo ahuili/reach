@@ -103,13 +103,15 @@ public final class Store {
     @discardableResult
     public func purgeExpired(now: Date = Date(), maxClips: Int = 3000) -> Int {
         var dead: [String] = []
-        for it in items.values where it.kind == .clip {
+        for it in items.values where it.kind != .kept {
             guard let e = it.expiresAt, e < now else { continue }
-            if !it.sensitive, Store.isCommon(it, now: now) { continue }
+            if it.kind == .clip, !it.sensitive, Store.isCommon(it, now: now) { continue }
             dead.append(it.id)
         }
         let clips = items.values.filter { $0.kind == .clip && !dead.contains($0.id) }.sorted { $0.createdAt > $1.createdAt }
         if clips.count > maxClips { dead += clips[maxClips...].filter { !Store.isCommon($0, now: now) }.map(\.id) }
+        let visits = items.values.filter { $0.kind == .visit && !dead.contains($0.id) }.sorted { $0.createdAt > $1.createdAt }
+        if visits.count > 2000 { dead += visits[2000...].map(\.id) }
         dead.forEach(delete)
         return dead.count
     }
@@ -120,6 +122,7 @@ public final class Store {
     }
 
     public var clips: [Item] { items.values.filter { $0.kind == .clip }.sorted { $0.createdAt > $1.createdAt } }
+    public var visits: [Item] { items.values.filter { $0.kind == .visit }.sorted { $0.createdAt > $1.createdAt } }
     public var kept: [Item] { items.values.filter { $0.kind == .kept }.sorted { $0.createdAt > $1.createdAt } }
 
     public func find(hash: String, kind: ItemKind) -> Item? {

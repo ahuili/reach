@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var rail: AgentRail!
     var bridge: Bridge!
     var shot: ShotController!
+    var links: LinkRouter!
+    /// 手边还没准备好时收到的链接（被点链接拉起来的那一下）
+    private var pendingLinks: [(URL, pid_t?)] = []
     let toast = Toast()
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
@@ -23,6 +26,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var hotkeyOK = false
     private(set) var hotkey2OK = false
     private(set) var shotHotkeyOK = false
+
+    func applicationWillFinishLaunching(_ note: Notification) {
+        // 链接分流：手边是默认浏览器时，点的链接从这里进来。要在启动完成前注册，才接得住把手边拉起来的那个链接
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let s = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let url = URL(string: s) else { return }
+        let pid = event.attributeDescriptor(forKeyword: AEKeyword(keySenderPIDAttr))?.int32Value
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        if let links { links.handle(url, sourcePID: pid) } else { pendingLinks.append((url, pid)) }
+    }
+
+    /// 双击 html 文件之类（手边登记成了能打开网页）：交给默认去处
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for u in urls {
+            if u.isFileURL { links?.openFile(u) } else if let links { links.handle(u, sourcePID: nil) } else { pendingLinks.append((u, nil)) }
+        }
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // 已经有一个在跑：让它把侧栏打开，自己退出
@@ -50,8 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bridge = Bridge(model: model)
         if ProcessInfo.processInfo.environment["REACH_KEYFILE"] != "1" { ambient = Ambient(model: model, monitor: monitor) }
         shot = ShotController(model: model, monitor: monitor)
+        links = LinkRouter(model: model)
         model.paster = paster
         model.shot = shot
+        model.links = links
         model.organizer = organizer
         model.rail = rail
         model.hidePanel = { [weak self] in self?.panelController.hide() }
@@ -72,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bridge.shot = shot
         bridge.testMode = test
         bridge.monitor = monitor
+        links.testMode = test
+        links.start()
+        for (u, pid) in pendingLinks { links.handle(u, sourcePID: pid) }
+        pendingLinks = []
         store.purgeExpired()
         if !test { monitor.start() }
         panelController.refreshHandles()
@@ -164,6 +193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "截图时自动遮住密钥", #selector(toggleShotRedact), checked: s.shotRedact)
         menu.addItem(.separator())
         add(menu, "暂停记录", #selector(togglePause), checked: s.paused)
+        if s.links.enabled { add(menu, "暂停链接分流", #selector(toggleLinkPause), checked: s.links.paused) }
+        else { add(menu, "链接分流（点链接自动去对的浏览器）…", #selector(openSettings)) }
         add(menu, "普通 ⌘V 也按目标窗口调整格式", #selector(toggleAmbient), checked: s.ambientFormat)
         menu.addItem(.separator())
         add(menu, Connect.claudeConnected ? "断开 Claude Code" : "连接 Claude Code…", #selector(toggleClaude), checked: Connect.claudeConnected)
@@ -190,6 +221,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func openPanel() { panelController.show(.menu) }
     @objc func togglePause() { model.settings.paused.toggle(); toast.show(model.settings.paused ? "已暂停记录" : "恢复记录") }
+    @objc func toggleLinkPause() {
+        model.settings.links.paused.toggle()
+        toast.show(model.settings.links.paused ? "链接分流已暂停：链接都开在默认去处" : "链接分流恢复")
+    }
     @objc func toggleAmbient() { model.settings.ambientFormat.toggle() }
     @objc func askTrust() { Keys.promptTrust() }
     @objc func toggleLogin() {

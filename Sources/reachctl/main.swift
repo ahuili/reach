@@ -184,6 +184,7 @@ case "status":
     out("自动粘贴（辅助功能权限）：\(yes("autopaste"))；暂停记录：\(yes("paused"))")
     out("看到的 Agent 会话：\(r["agents"] ?? 0)；已连接 Claude Code：\(yes("claude"))，Codex：\(yes("codex"))，命令行已安装：\(yes("cli"))")
     out("开机自动打开：\(yes("login"))")
+    out("链接分流：\(yes("links"))；暂停：\(yes("linksPaused"))；默认浏览器是手边：\(yes("linksDefault"))；记住的规则 \(r["linkRules"] ?? 0) 条")
 case "import":
     guard args.first == "sidenotes" else { err("用法：reach import sidenotes"); exit(2) }
     let r = call(["cmd": "import.sidenotes"], timeout: 60)

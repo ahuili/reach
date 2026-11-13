@@ -215,6 +215,7 @@ struct SettingsView: View {
                 Text("截完先认字：Key、密码、Token、带密码的连接串所在的位置直接打上马赛克，工具栏上点一下可以取消。截图需要「屏幕录制」权限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            LinkSection(model: model)
             Section("粘贴") {
                 Toggle("普通的 ⌘V 也按目标窗口调整格式", isOn: $s.ambientFormat)
                 Text("从 AI 那里复制的内容带着 ** ## 这些记号。切到微信、企业微信等聊天窗口时自动换成干净文字，切到邮件、Word 时带上格式；切走后恢复原样。")
@@ -246,6 +247,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520, height: 640)
         .onChange(of: s) { new in
+            // 链接分流的设置由 LinkSection 直接改（分流时也会自动加规则），这里不拿旧副本盖掉
+            var new = new
+            new.links = model.settings.links
             model.settings = new
             model.rebuild()
             if let app = NSApp.delegate as? AppDelegate {
@@ -320,5 +324,107 @@ struct KeyRecorder: View {
         if let m = monitor { NSEvent.removeMonitor(m) }
         monitor = nil
         if recording { recording = false; (NSApp.delegate as? AppDelegate)?.suspendHotkeys(false) }
+    }
+}
+
+/// 设置里的「链接分流」：直接读写 model.settings.links
+struct LinkSection: View {
+    @ObservedObject var model: AppModel
+    @State private var busy = false
+    @State private var isDefault = LinkRouter.isDefault
+    @State private var dests: [LinkDest] = []
+
+    private var links: LinkRouter? { (NSApp.delegate as? AppDelegate)?.links }
+    private var ls: Binding<LinkSettings> { Binding(get: { model.settings.links }, set: { model.settings.links = $0 }) }
+
+    var body: some View {
+        Section("链接分流") {
+            Toggle("点链接时自动去对的浏览器、账号、窗口", isOn: Binding(get: { model.settings.links.enabled }, set: { on in toggle(on) }))
+                .disabled(busy)
+            Text("打开后手边会成为默认浏览器（系统会问一次），由它把链接转给对的浏览器。按住 ⌥ 点链接一定会让你选。关掉时默认浏览器还给原来那个。")
+                .font(.caption).foregroundStyle(.secondary)
+            if model.settings.links.enabled {
+                if !isDefault {
+                    HStack {
+                        Text("默认浏览器现在不是手边，链接不会经过分流。").font(.caption).foregroundStyle(Palette.warn)
+                        Button("重新设置") { toggle(true) }.buttonStyle(.link)
+                    }
+                }
+                Toggle("暂停（链接都开在默认去处）", isOn: ls.paused)
+                Picker("没见过的链接", selection: ls.unknown) {
+                    Text("有把握才直接开，否则问我").tag(LinkUnknown.guess)
+                    Text("每次都问").tag(LinkUnknown.ask)
+                    Text("直接开在默认去处").tag(LinkUnknown.fallback)
+                }
+                Picker("默认去处", selection: Binding(get: { model.settings.links.fallback?.key ?? "" },
+                                                 set: { k in model.settings.links.fallback = dests.first { $0.id == k }?.target })) {
+                    Text("原来的默认浏览器").tag("")
+                    ForEach(dests.filter { $0.target.group == nil }) { d in Text(d.title).tag(d.id) }
+                }
+                Picker("开完提示「换 / 记住」", selection: ls.notice) {
+                    Text("只在推测时").tag(LinkNotice.guessed)
+                    Text("每次").tag(LinkNotice.always)
+                    Text("从不").tag(LinkNotice.never)
+                }
+                Toggle("记下点过的链接，可以在侧栏里搜到", isOn: ls.recordVisits)
+                Text("只记从别的 App 点出来、经过分流的链接，存进手边的加密库，留 30 天；网址里 token、key、签名这类参数先擦掉。几秒后读回网页标题，按标题也能搜。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("「有把握」指：链接是某个账号的公司域名，或者这个网站最近 30 天在同一个账号里开了 10 次以上、占 95% 以上，且最近 3 次都在它。浏览历史只在本机数次数，不读页面。")
+                    .font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("去处（\(dests.count) 个）") {
+                    ForEach(dests) { d in
+                        HStack(spacing: 9) {
+                            DestIcon(dest: d, size: 22)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(d.primary).font(.system(size: 12.5))
+                                if !d.secondary.isEmpty { Text(d.secondary).font(.system(size: 11)).foregroundStyle(.secondary) }
+                            }
+                        }
+                    }
+                    Text("窗口组：在 Chrome 的「窗口 › 命名窗口」里给窗口起名，名字的第一个词就是组名（「公司」「公司 客户A」都算「公司」组）。第一次用时系统会问是否允许手边控制浏览器。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("刷新") { reload() }.buttonStyle(.link)
+                }
+                DisclosureGroup("记住的规则（\(model.settings.links.rules.count) 条）") {
+                    if model.settings.links.rules.isEmpty {
+                        Text("还没有。选的时候点「都这样」，或者同一个网站连续两次选同一个地方，就会记下来。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(model.settings.links.rules) { r in
+                        HStack {
+                            Text(describe(r)).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button { model.settings.links.rules.removeAll { $0.id == r.id } } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.plain).foregroundStyle(.secondary).help("删掉这条")
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    private func reload() {
+        isDefault = LinkRouter.isDefault
+        dests = links?.destinations() ?? []
+        links?.refreshGroups { dests = links?.destinations() ?? [] }
+    }
+
+    private func describe(_ r: LinkRule) -> String {
+        var from: [String] = []
+        if let s = r.sourceName ?? r.source { from.append("从 \(s) 来的") }
+        if let site = r.site { from.append(site) }
+        return from.joined(separator: " ") + " → " + (links?.name(of: r.target) ?? r.target.key)
+    }
+
+    private func toggle(_ on: Bool) {
+        guard let links else { return }
+        busy = true
+        let done: (Bool) -> Void = { ok in
+            busy = false
+            isDefault = LinkRouter.isDefault
+            if on && !ok { model.toast("没设成默认浏览器，链接分流没打开") }
+            reload()
+        }
+        if on { links.enable(done: done) } else { links.disable(done: done) }
     }
 }

@@ -58,7 +58,8 @@ final class Bridge {
                    "sensitive": store.items.values.filter { $0.sensitive }.count,
                    "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "shotkey": app?.shotHotkeyOK ?? false, "shotlabel": model.settings.shotKey.label, "panellabel": model.settings.panelKey.label, "screen": ShotGrab.allowed, "autopaste": Keys.trusted,
                    "paused": store.settings.paused, "agents": model.agents.count,
-                   "claude": Connect.claudeConnected, "codex": Connect.codexConnected, "cli": Connect.cliInstalled, "login": LoginItem.enabled])
+                   "claude": Connect.claudeConnected, "codex": Connect.codexConnected, "cli": Connect.cliInstalled, "login": LoginItem.enabled,
+                   "links": store.settings.links.enabled, "linksPaused": store.settings.links.paused, "linksDefault": LinkRouter.isDefault, "linkRules": store.settings.links.rules.count])
         case "import.sidenotes":
             guard let app = NSApp.delegate as? AppDelegate else { reply(["error": "gone"]); return }
             reply(app.importSideNotes())
@@ -151,6 +152,43 @@ final class Bridge {
             app?.panelController.show(.approval)
             reply(["ok": true, "rows": model.rows.map(\.id).count, "approvals": model.approvals.map(\.title), "confirm": model.confirmSecret != nil,
                    "options": (model.options ?? []).map { $0.label + " " + $0.detail }, "agents": model.agents.map { "\($0.agent.name)|\($0.project)|\($0.state.rawValue)|\($0.detail)" }])
+        case "debug.link":
+            // 链接分流的测试入口：只在测试模式里能改设置、塞历史；判断结果只回去处，不开浏览器
+            guard let links = app?.links else { reply(["error": "no links"]); return }
+            if testMode {
+                if let b = req["enable"] as? Bool { model.settings.links.enabled = b }
+                if let u = req["unknown"] as? String, let m = LinkUnknown(rawValue: u) { model.settings.links.unknown = m }
+                if req["reset"] as? Bool == true { model.settings.links.rules = []; model.settings.links.streaks = [:] }
+                var vs: [String: SiteVisits]?
+                if let v = req["visits"] as? [String: [String: Int]] {
+                    vs = v.mapValues { counts in
+                        var sv = SiteVisits(); var t = 0.0
+                        // 次数少的先加，最近几次落在次数最多的账号上
+                        for (k, n) in counts.sorted(by: { $0.value < $1.value }) { for _ in 0..<n { t += 1; sv.add(k, at: t) } }
+                        return sv
+                    }
+                }
+                links.debugSet(visits: vs, domains: req["domains"] as? [String: String], groups: req["groups"] as? [String: [String]])
+            }
+            var out: [String: Any] = ["ok": true]
+            if let s = req["url"] as? String, let u = URL(string: s) {
+                let src = req["source"] as? String
+                if testMode, let i = req["pick"] as? Int {
+                    let r = LinkPicker.Remember(rawValue: req["remember"] as? String ?? "once") ?? .once
+                    out["picked"] = links.debugChoose(u, index: i, remember: r, source: src)?.key ?? ""
+                } else if testMode, req["handle"] as? Bool == true {
+                    links.handle(u, source: src, sourceName: src, option: false)
+                    out["opened"] = links.testLog.last?["target"] ?? ""
+                }
+                let d = links.decide(u, source: src)
+                out["kind"] = d.kind.rawValue; out["url"] = d.url.absoluteString; out["target"] = d.target?.key ?? ""
+                out["ranked"] = d.ranked.prefix(6).map(\.target.key)
+            }
+            if let u = (req["snapURL"] as? String).flatMap(URL.init(string:)) { links.debugSnap(u, picker: req["pickerSnap"] as? String, notice: req["noticeSnap"] as? String) }
+            out["hosts"] = links.visits.count; out["loadMS"] = links.loadMS
+            out["rules"] = model.settings.links.rules.map { "\($0.site ?? "*")|\($0.source ?? "*")>\($0.target.key)" }
+            out["dests"] = links.destinations().map { "\($0.target.key)=\($0.title)" }
+            reply(out)
         case "debug.shot":
             // 截图界面的测试入口：拿一张图当冻住的屏幕，不需要屏幕录制权限
             guard let shot else { reply(["error": "no shot"]); return }

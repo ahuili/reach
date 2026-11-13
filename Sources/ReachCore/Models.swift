@@ -1,6 +1,7 @@
 import Foundation
 
-public enum ItemKind: String, Codable { case clip, kept }
+/// clip 复制历史，kept 留存，visit 从别的 App 点开、经过链接分流的链接（只进搜索，30 天后清掉）
+public enum ItemKind: String, Codable { case clip, kept, visit }
 
 public enum ContentType: String, Codable, CaseIterable {
     case text, link, command, error, code, json, table, credential, secret, image, file, email, phone, path
@@ -58,6 +59,8 @@ public struct Item: Codable, Identifiable, Equatable {
     /// 用户标记过"这不是密钥"的值
     public var notSecret: [String]
     public var hash: String
+    /// 点过的链接：开到了哪里（LinkTarget.key）
+    public var openedIn: String?
 
     public init(id: String = UUID().uuidString, kind: ItemKind, ctype: ContentType = .text, title: String = "", text: String,
                 html: String? = nil, imageFile: String? = nil, files: [String]? = nil, sourceApp: String? = nil,
@@ -140,6 +143,8 @@ public struct Settings: Codable, Equatable {
     public var shotKey = KeyCombo.defaultShot
     /// 截图里认出的密钥自动打码
     public var shotRedact = true
+    /// 链接分流
+    public var links = LinkSettings()
     public var ai = AISettings()
     public init() {}
 
@@ -160,6 +165,7 @@ public struct Settings: Codable, Equatable {
         panelKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .panelKey)) ?? KeyCombo.defaultPanel
         shotKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .shotKey)) ?? KeyCombo.defaultShot
         shotRedact = try c.decodeIfPresent(Bool.self, forKey: .shotRedact) ?? true
+        links = (try? c.decodeIfPresent(LinkSettings.self, forKey: .links)) ?? LinkSettings()
         ai = try c.decodeIfPresent(AISettings.self, forKey: .ai) ?? AISettings()
     }
 }

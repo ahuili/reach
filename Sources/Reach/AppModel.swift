@@ -109,6 +109,7 @@ final class AppModel: ObservableObject {
     // 由 AppDelegate 接上
     var paster: Paster!
     var shot: ShotController!
+    var links: LinkRouter!
     var organizer: Organizer!
     var rail: AgentRail!
     /// SideNotes 里还没搬过来的笔记数（有才显示搬家提示）
@@ -251,9 +252,10 @@ final class AppModel: ObservableObject {
         scored.sort { $0.1 > $1.1 }
         let hits = scored.prefix(60).map(\.0)
         var out: [Row] = []
-        let keptHits = hits.filter { $0.kind == .kept }, clipHits = hits.filter { $0.kind == .clip }
+        let keptHits = hits.filter { $0.kind == .kept }, clipHits = hits.filter { $0.kind == .clip }, visitHits = hits.filter { $0.kind == .visit }
         if !keptHits.isEmpty { out.append(.header("留存", "\(keptHits.count)")); out += keptHits.map { .item($0, indent: false) } }
         if !clipHits.isEmpty { out.append(.header("最近复制", "\(clipHits.count)")); out += clipHits.map { .item($0, indent: false) } }
+        if !visitHits.isEmpty { out.append(.header("点过的链接", "\(visitHits.count)")); out += visitHits.map { .item($0, indent: false) } }
         // 字面搜不到几条时，补上"意思相近"的
         let extra = semantic.compactMap { store.items[$0] }.filter { e in !hits.contains { $0.id == e.id } }
         if hits.count < 5, !extra.isEmpty {
@@ -305,6 +307,8 @@ final class AppModel: ObservableObject {
     // MARK: 操作
 
     func activate(_ it: Item, plain: Bool = false) {
+        // 点过的链接：回车按原来的去处再开一次（→ 里可以贴网址、换个地方开）
+        if it.kind == .visit, !plain { hidePanel(); links?.reopen(it); return }
         // 账号密码类的留存，回车就是贴密码，不当成带空位的模板
         if !plain, it.kind == .kept, !it.sensitive, it.ctype != .credential, it.ctype != .secret {
             let slots = Template.slots(in: it.text)

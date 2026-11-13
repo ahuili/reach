@@ -53,6 +53,17 @@ cat > $APP/Contents/Info.plist <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT License</string>
+  <key>NSAppleEventsUsageDescription</key><string>链接分流要把链接开到你指定的浏览器窗口里，并在同一个网址已经开着时切过去。</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>Web site URL</string>
+    <key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array>
+  </dict></array>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>HTML document</string>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Alternate</string>
+    <key>LSItemContentTypes</key><array><string>public.html</string><string>public.xhtml</string></array>
+  </dict></array>
 </dict></plist>
 PLIST
 

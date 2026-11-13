@@ -217,6 +217,72 @@ do {
     check(ShotText.findings(lines: ["~/code/shop-web 》npm run dev -- --port 3001"]).contains { $0.label == "命令" }, "认字把提示符认成》也行")
 }
 
+// 链接分流
+do {
+    let u = { (s: String) in URL(string: s)! }
+    check(LinkLogic.unwrap(u("https://slack-redirect.slack.com/?url=https%3A%2F%2Fx.com%2Fa%2Fstatus%2F1")).absoluteString == "https://x.com/a/status/1", "剥掉 Slack 跳转壳")
+    check(LinkLogic.unwrap(u("https://www.google.com/url?q=https://claude.ai/chat/1&sa=D")).host == "claude.ai", "剥掉 Google 跳转壳")
+    check(LinkLogic.unwrap(u("https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fdocs.google.com%2Fd%2F1&data=x")).host == "docs.google.com", "剥掉 Outlook 安全链接")
+    check(LinkLogic.unwrap(u("https://link.zhihu.com/?target=https%3A%2F%2Fgithub.com%2Fa")).host == "github.com", "剥掉知乎跳转")
+    check(LinkLogic.unwrap(u("https://www.google.com/search?q=https://x.com")).host == "www.google.com", "Google 搜索页不剥")
+    check(LinkLogic.unwrap(u("https://x.com/home?u=https://evil.com")).host == "x.com", "普通网站带 url 参数不剥")
+    check(LinkLogic.siteCovers("x.com", u("https://mobile.x.com/a")) && !LinkLogic.siteCovers("x.com", u("https://notx.com/")), "子域名算，同后缀的别家不算")
+    check(LinkLogic.siteCovers("github.com/corp", u("https://github.com/Corp/repo")) && !LinkLogic.siteCovers("github.com/corp", u("https://github.com/corporate")), "路径前缀按整段匹配")
+    check(LinkLogic.suggestedSite(u("https://github.com/anthropics/x/pull/1")) == "github.com/anthropics" && LinkLogic.suggestedSite(u("https://www.x.com/a")) == "x.com", "建议的规则网站")
+    let work = LinkTarget(browser: "com.google.Chrome", profile: "Profile 1"), me = LinkTarget(browser: "com.google.Chrome", profile: "Default"),
+        alt = LinkTarget(browser: "com.brave.Browser", group: "小号")
+    let rules = [LinkRule(source: "com.tinyspeck.slackmacgap", target: work),
+                 LinkRule(site: "docs.google.com", target: me),
+                 LinkRule(site: "docs.google.com", source: "com.tinyspeck.slackmacgap", target: work),
+                 LinkRule(site: "github.com", target: me), LinkRule(site: "github.com/corp", target: work),
+                 LinkRule(site: "x.com", target: alt)]
+    check(LinkLogic.match(rules, url: u("https://docs.google.com/d/1"), source: "com.tinyspeck.slackmacgap")?.target == work, "网站+来源最优先")
+    check(LinkLogic.match(rules, url: u("https://docs.google.com/d/1"), source: "com.tencent.xinWeChat")?.target == me, "其次网站")
+    check(LinkLogic.match(rules, url: u("https://example.com/"), source: "com.tinyspeck.slackmacgap")?.target == work, "再次来源")
+    check(LinkLogic.match(rules, url: u("https://x.com/a"), source: "com.tinyspeck.slackmacgap")?.target == alt, "网站规则压过来源规则")
+    check(LinkLogic.match(rules, url: u("https://github.com/corp/a"), source: nil)?.target == work && LinkLogic.match(rules, url: u("https://github.com/me/a"), source: nil)?.target == me, "路径越长越优先")
+    check(LinkLogic.match(rules, url: u("https://example.com/"), source: nil) == nil, "没有规则就不命中")
+    var ls = LinkSettings()
+    check(LinkLogic.learn(&ls, site: "x.com", target: alt) == nil, "选一次不记规则")
+    check(LinkLogic.learn(&ls, site: "x.com", target: me) == nil, "换了去处重新数")
+    check(LinkLogic.learn(&ls, site: "x.com", target: me)?.target == me && ls.rules.count == 1 && ls.streaks["x.com"] == nil, "连续两次同一去处记成规则")
+    LinkLogic.upsert(&ls.rules, LinkRule(site: "x.com", target: alt))
+    check(ls.rules.count == 1 && ls.rules[0].target == alt, "同网站的规则替换不重复")
+    // 保守推测
+    var v = SiteVisits()
+    for i in 0..<19 { v.add(me.profileKey, at: Double(i)) }
+    v.add(work.profileKey, at: 1.5)
+    check(LinkLogic.guess(url: u("https://claude.ai/"), visits: v, domains: [:]).sure == me.profileKey, "一个账号占 95% 且最近 3 次都在它：直接开")
+    var v2 = v; v2.add(work.profileKey, at: 100)
+    check(LinkLogic.guess(url: u("https://claude.ai/"), visits: v2, domains: [:]).sure == nil, "最近一次在别的账号：不直接开")
+    check(LinkLogic.guess(url: u("https://claude.ai/"), visits: v2, domains: [:]).ranked.first == me.profileKey, "但排第一")
+    var v3 = SiteVisits(); for i in 0..<6 { v3.add(me.profileKey, at: Double(i)) }
+    check(LinkLogic.guess(url: u("https://claude.ai/"), visits: v3, domains: [:]).sure == nil, "次数太少不直接开")
+    let d = [work.profileKey: "corp.com", me.profileKey: ""]
+    check(LinkLogic.guess(url: u("https://wiki.corp.com/a"), visits: v, domains: d).sure == work.profileKey, "企业域名对上直接开")
+    check(LinkLogic.guess(url: u("https://wiki.corp.com/a"), visits: nil, domains: [work.profileKey: "corp.com", "b": "corp.com"]).sure == nil, "两个账号同一个企业域名：要问")
+    check(LinkLogic.group(of: "公司 客户A") == "公司" && LinkLogic.group(of: "公司-周报") == "公司" && LinkLogic.group(of: "个人") == "个人", "窗口组名取第一个词")
+    let scrubbed = LinkLogic.scrub(u("https://u:pw@app.example.com/cb?state=ok&access_token=abc123xyz&X-Amz-Signature=deadbeef#id_token=zzz"))
+    check(!scrubbed.contains("abc123xyz") && !scrubbed.contains("deadbeef") && !scrubbed.contains("zzz") && !scrubbed.contains("pw@") && scrubbed.contains("state=ok"), "点过的链接存之前擦掉 token、签名、密码（\(scrubbed)）")
+    check(LinkLogic.scrub(u("https://x.com/a/status/1?s=20")) == "https://x.com/a/status/1?s=20", "普通链接原样")
+    check(LinkTarget(key: alt.key) == alt && LinkTarget(key: work.key) == work && LinkTarget(key: "") == nil, "去处 key 能还原")
+    var st = Settings(); st.links.enabled = true; st.links.rules = rules
+    let back = try! JSONDecoder().decode(Settings.self, from: try! JSONEncoder().encode(st))
+    check(back.links == st.links, "分流设置能存能读")
+    check((try? JSONDecoder().decode(Settings.self, from: Data("{\"links\":{\"unknown\":\"weird\"}}".utf8)))?.links.unknown == .guess, "坏的设置退回默认")
+}
+
+// 点过的链接：30 天后清掉，不进复制历史
+do {
+    let st = try! Store(vault: try! Vault.open())
+    var v = Item(kind: .visit, ctype: .link, text: "https://x.com/old"); v.expiresAt = Date().addingTimeInterval(-10); v.useCount = 9; v.lastUsedAt = Date()
+    var v2 = Item(kind: .visit, ctype: .link, text: "https://x.com/new"); v2.expiresAt = Date().addingTimeInterval(86400); v2.openedIn = "com.google.Chrome|Default|"
+    st.save(v); st.save(v2)
+    _ = st.purgeExpired()
+    check(st.items[v.id] == nil && st.items[v2.id] != nil, "过期的点过的链接被清掉（用过很多次也清）")
+    check(!st.clips.contains { $0.id == v2.id } && st.visits.first?.openedIn == "com.google.Chrome|Default|", "不混进复制历史，去处存下来了")
+}
+
 // 用真实的 SideNotes 库试跑导入，只输出统计数字（不输出任何内容）。REACH_IMPORT_STATS=1 时才跑，数据进临时目录。
 if ProcessInfo.processInfo.environment["REACH_IMPORT_STATS"] == "1", let url = SideNotesImporter.available {
     let st = try! Store(vault: try! Vault.open())

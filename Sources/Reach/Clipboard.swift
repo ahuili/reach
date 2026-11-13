@@ -173,7 +173,7 @@ final class ClipboardMonitor {
 // MARK: 粘贴
 
 enum PasteMode {
-    case smart, plain, raw, cleanText, rich, codeOnly, jsonPretty, oneLine, ocr, login, shotPath, annotate, pin
+    case smart, plain, raw, cleanText, rich, codeOnly, jsonPretty, oneLine, ocr, login, shotPath, annotate, pin, reopen, reopenAsk
     case value(String, secret: Bool)
     case ai(String)
     case filled(String)
@@ -191,7 +191,8 @@ final class Paster {
         var out: [PasteOption] = []
         let fs = model.fields(it)
         if it.ctype != .image && it.ctype != .file {
-            out.append(PasteOption(label: "整条", detail: "↩", icon: "doc.plaintext", mode: .smart))
+            out.append(it.kind == .visit ? PasteOption(label: "贴网址", detail: "贴进刚才的窗口", icon: "link", mode: .smart)
+                                         : PasteOption(label: "整条", detail: "↩", icon: "doc.plaintext", mode: .smart))
         }
         for f in fs {
             out.append(PasteOption(label: "只贴\(f.label)", icon: Self.fieldIcon(f.kind), detail: f.kind == .secret && !model.isRevealed(it) ? SecretDetector.maskValue(f.value) : Text.truncate(f.value, 44),
@@ -199,6 +200,11 @@ final class Paster {
         }
         if fs.contains(where: { $0.kind == .account }) && fs.contains(where: { $0.kind == .secret }) {
             out.append(PasteOption(label: "填登录框", detail: "账号 ⇥ 密码  ⌥↩", icon: "person.badge.key", mode: .login))
+        }
+        if it.kind == .visit {
+            let to = it.openedIn.flatMap(LinkTarget.init(key:)).map { model.links?.dest($0)?.title ?? LinkBrowsers.name($0.browser) } ?? "默认浏览器"
+            out.insert(PasteOption(label: "再打开", detail: "\(to)  ↩", icon: "arrow.up.forward.app", mode: .reopen), at: 0)
+            out.insert(PasteOption(label: "换个地方打开", detail: "选浏览器、账号、窗口", icon: "arrow.triangle.branch", mode: .reopenAsk), at: 1)
         }
         if it.ctype == .image {
             out.append(PasteOption(label: "图片", detail: "↩", icon: "photo", mode: .smart))
@@ -281,7 +287,7 @@ final class Paster {
         case .value(let v, let secret): p.plain = v; p.containsSecret = secret; return p
         case .filled(let t): p.plain = t
         case .ocr: p.plain = it.ocr ?? ""
-        case .login, .ai, .shotPath, .annotate, .pin: return nil
+        case .login, .ai, .shotPath, .annotate, .pin, .reopen, .reopenAsk: return nil
         }
         p.containsSecret = !secrets.isEmpty && secrets.contains { p.plain.contains($0.value) }
         return p
@@ -308,6 +314,8 @@ final class Paster {
         if case .login = mode { login(it); return }
         if case .annotate = mode { model.hidePanel(); model.shot.annotate(it); return }
         if case .pin = mode { model.hidePanel(); model.shot.pin(it); return }
+        if case .reopen = mode { model.hidePanel(); model.links?.reopen(it); return }
+        if case .reopenAsk = mode { model.hidePanel(); model.links?.reopen(it, ask: true); return }
         if case .ai(let instruction) = mode { aiPaste(it, instruction: instruction); return }
         guard let p = payload(it, mode: mode, target: target) else { model.toast("这条贴不了"); return }
         // 密钥要贴进聊天窗口或 AI 对话框：先拦一下

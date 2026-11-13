@@ -394,6 +394,12 @@ struct ItemRow: View {
         if item.kind == .kept, model.folderFilter == nil || !model.query.isEmpty {
             let f = model.folderName(item.folderId); if !f.isEmpty { parts.append(f) }
         }
+        if item.kind == .visit {
+            let to = item.openedIn.flatMap(LinkTarget.init(key:)).map { model.links?.dest($0)?.title ?? LinkBrowsers.name($0.browser) }
+            parts.append([item.sourceApp, to].compactMap { $0 }.joined(separator: " → "))
+            parts.append(Fmt.time(item.createdAt))
+            return parts.joined(separator: " · ")
+        }
         if let a = item.sourceApp, item.origin != .imported { parts.append(item.origin == .agent ? "来自 \(a)" : a) }
         parts.append(Fmt.time(item.kind == .kept ? (item.lastUsedAt ?? item.createdAt) : item.createdAt))
         if let t = model.targetBundle, let n = item.useByApp[t], n > 0 { parts.append("在\(model.targetName)贴过 \(n) 次") }
@@ -453,6 +459,8 @@ struct ItemRow: View {
                 Circle().fill(inBasket ? Palette.brand : Color.clear)
                 Circle().strokeBorder(inBasket ? Palette.brand : Color.secondary.opacity(0.45), lineWidth: 1.5)
                 if inBasket { Image(systemName: "checkmark").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Palette.brandInk) }
+            } else if item.kind == .visit, let icon = item.openedIn.flatMap(LinkTarget.init(key:)).flatMap({ LinkBrowsers.icon($0.browser) }) {
+                Image(nsImage: icon).resizable().interpolation(.high).frame(width: 26, height: 26)
             } else if item.kind == .clip, item.ctype != .credential, item.ctype != .secret, let icon = AppIcons.icon(item.sourceBundle) {
                 Image(nsImage: icon).resizable().interpolation(.high).frame(width: 26, height: 26)
             } else {
