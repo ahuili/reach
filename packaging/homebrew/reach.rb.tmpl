@@ -13,15 +13,22 @@ cask "reach" do
     strategy :github_latest
   end
 
-  depends_on macos: :sonoma
+  # Homebrew 6 起 :sonoma 表示「14 及以上」，字符串写法被弃用；5 及更早 :sonoma 只表示「正好是 14」，要写成字符串。
+  # 按版本号判断，不用 respond_to?：更老的 Homebrew 里 cask 对任何方法都回答「有」。
+  new_brew = HOMEBREW_VERSION.to_i >= 6
+  if new_brew
+    depends_on macos: :sonoma
+  else
+    depends_on macos: ">= :sonoma"
+  end
 
   app "Reach.app"
   binary "#{appdir}/Reach.app/Contents/MacOS/reachctl", target: "reach"
 
   # 还没有 Apple 公证：去掉隔离标记，否则 macOS 会拦着不让打开
   reach_app = "#{appdir}/Reach.app"
-  # Homebrew 7 起用 postflight_steps；更早的版本没有它，只认 postflight 块
-  if respond_to?(:postflight_steps)
+  # Homebrew 6 起用 postflight_steps（postflight 块被弃用）；5 及更早只认 postflight 块
+  if new_brew
     postflight_steps do
       run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", reach_app], must_succeed: false
     end
