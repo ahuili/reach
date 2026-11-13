@@ -7,6 +7,7 @@ import ReachCore
 enum HotKey {
     private static var handlers: [UInt32: () -> Void] = [:]
     private static var installed = false
+    private static var refs: [UInt32: EventHotKeyRef] = [:]
 
     @discardableResult
     static func register(id: UInt32, key: UInt32, mods: UInt32, _ h: @escaping () -> Void) -> Bool {
@@ -23,9 +24,15 @@ enum HotKey {
         }
         var ref: EventHotKeyRef?
         let st = RegisterEventHotKey(key, mods, EventHotKeyID(signature: OSType(0x4D52474E), id: id), GetApplicationEventTarget(), 0, &ref)
-        guard st == noErr else { return false }
+        guard st == noErr, let ref else { return false }
         handlers[id] = h
+        refs[id] = ref
         return true
+    }
+
+    static func unregister(id: UInt32) {
+        if let r = refs.removeValue(forKey: id) { UnregisterEventHotKey(r) }
+        handlers[id] = nil
     }
 }
 

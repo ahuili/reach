@@ -108,6 +108,7 @@ final class AppModel: ObservableObject {
 
     // 由 AppDelegate 接上
     var paster: Paster!
+    var shot: ShotController!
     var organizer: Organizer!
     var rail: AgentRail!
     /// SideNotes 里还没搬过来的笔记数（有才显示搬家提示）

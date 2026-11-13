@@ -58,7 +58,9 @@ public enum ReachPaths {
 
 public enum CryptoError: Error { case keychain(OSStatus), badData }
 
-/// 整库加密用的密钥。正式运行放在系统钥匙串；测试（REACH_KEYFILE=1）放在数据目录的文件里。
+/// 整库加密用的密钥，放在数据目录里的 db.key（权限 600，只有你的账号能读）。
+/// 以前放在系统钥匙串：自签名的 App 没有开发者团队编号，钥匙串按每一版程序的指纹认人，每次升级都要输一次密码，所以搬出来。
+/// 旧版存在钥匙串里的密钥，第一次启动时读一次（系统最后问一次），写进文件。测试（REACH_KEYFILE=1）用 test.key。
 public struct Vault {
     public let key: SymmetricKey
 
@@ -69,8 +71,38 @@ public struct Vault {
         if ProcessInfo.processInfo.environment["REACH_KEYFILE"] == "1" {
             return Vault(key: try fileKey())
         }
-        if migrated { try adoptLegacyKey() }
-        return Vault(key: try keychainKey())
+        ReachPaths.ensure()
+        let url = keyFile
+        // 刚从页边 Margin 搬来：库是旧密钥加密的，用旧密钥
+        if migrated {
+            let (ost, old) = read(legacyService)
+            guard ost == errSecSuccess, let od = old, od.count == 32 else { throw CryptoError.keychain(ost == errSecSuccess ? errSecDecode : ost) }
+            try writeKey(od, to: url)
+            return Vault(key: SymmetricKey(data: od))
+        }
+        if let d = try? Data(contentsOf: url), d.count == 32 { return Vault(key: SymmetricKey(data: d)) }
+        // 还没有密钥文件：以前的版本把密钥放在钥匙串里，读出来搬到文件
+        let (st, cur) = read(service)
+        if st == errSecSuccess, let d = cur, d.count == 32 { try writeKey(d, to: url); return Vault(key: SymmetricKey(data: d)) }
+        if FileManager.default.fileExists(atPath: ReachPaths.db.path) {
+            if st != errSecItemNotFound { throw CryptoError.keychain(st) }
+            let (ost, old) = read(legacyService)
+            guard ost == errSecSuccess, let od = old, od.count == 32 else { throw CryptoError.keychain(ost == errSecSuccess ? errSecDecode : ost) }
+            try writeKey(od, to: url)
+            return Vault(key: SymmetricKey(data: od))
+        }
+        let k = SymmetricKey(size: .bits256)
+        try writeKey(k.withUnsafeBytes { Data($0) }, to: url)
+        return Vault(key: k)
+    }
+
+    public static var keyFile: URL { ReachPaths.home.appendingPathComponent("db.key") }
+
+    static func writeKey(_ d: Data, to url: URL) throws {
+        // 先建好只有自己能读的空文件再写，中间不留别人能读的窗口
+        FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        try d.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     static func fileKey() throws -> SymmetricKey {
@@ -95,40 +127,6 @@ public struct Vault {
         var out: CFTypeRef?
         let st = SecItemCopyMatching(query as CFDictionary, &out)
         return (st, out as? Data)
-    }
-
-    /// 读旧版的密钥（系统会问一次），存到新名字下，替换掉可能已经建好的新密钥
-    static func adoptLegacyKey() throws {
-        let (ost, old) = read(legacyService)
-        guard ost == errSecSuccess, let od = old, od.count == 32 else { throw CryptoError.keychain(ost == errSecSuccess ? errSecDecode : ost) }
-        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary)
-        try add(od)
-    }
-
-    static func add(_ d: Data) throws {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                kSecAttrAccount as String: account, kSecValueData as String: d,
-                                kSecAttrLabel as String: "手边 Reach 数据库密钥",
-                                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let st = SecItemAdd(q as CFDictionary, nil)
-        guard st == errSecSuccess else { throw CryptoError.keychain(st) }
-    }
-
-    /// 钥匙串条目由 App 自己建，访问名单里就是它自己（按签名证书认），以后启动不再弹框。
-    /// 只有从旧版搬过来时，读旧条目会问一次。
-    static func keychainKey() throws -> SymmetricKey {
-        let (st, cur) = read(service)
-        if st == errSecSuccess, let d = cur, d.count == 32 { return SymmetricKey(data: d) }
-        guard st == errSecItemNotFound else { throw CryptoError.keychain(st) }
-        var k = SymmetricKey(size: .bits256)
-        if FileManager.default.fileExists(atPath: ReachPaths.db.path) {
-            // 库已经在了（旧版搬来的）：必须用旧密钥，否则读不出来
-            let (ost, old) = read(legacyService)
-            guard ost == errSecSuccess, let od = old, od.count == 32 else { throw CryptoError.keychain(ost == errSecSuccess ? errSecDecode : ost) }
-            k = SymmetricKey(data: od)
-        }
-        try add(k.withUnsafeBytes { Data($0) })
-        return k
     }
 
     public func seal(_ data: Data) throws -> Data {

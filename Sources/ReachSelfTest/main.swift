@@ -195,6 +195,28 @@ check(ipcAnswer?["echo"] as? String == "ping", "通信往返")
 server.stop()
 
 try? FileManager.default.removeItem(at: tmp)
+// 截图认字：打码位置和可拿走的东西
+do {
+    let key = "sk-proj-" + String(repeating: "aB3dE6fG9h", count: 4)
+    let line = "OPENAI_API_KEY=" + key
+    let rs = ShotText.secretRanges(in: line)
+    check(rs.count == 1 && (line as NSString).substring(with: rs[0]) == key, "截图里的 Key 只遮值本身")
+    check(ShotText.secretRanges(in: "修改密码功能已上线").isEmpty, "说到密码的句子不遮")
+    let conn = "postgres://app:Xk29fLq7pW@db.internal:5432/orders"
+    check(!ShotText.secretRanges(in: conn).isEmpty, "连接串里的密码要遮")
+    let f = ShotText.findings(lines: ["订单管理", "TypeError: Cannot read properties of undefined (reading 'map')", "at OrderList (OrderList.tsx:42:18)",
+                                      "$ npm run dev -- --port 3001", "https://github.com/vercel/next.js/discussions/48110", line])
+    let labels = f.map(\.label)
+    check(labels.contains("报错") && labels.contains("网址") && labels.contains("全部文字"), "截图里认出报错、网址（实际 \(labels)）")
+    check(f.first { $0.label == "报错" }?.value.hasPrefix("TypeError") == true, "报错从错误那行开始")
+    check(!(f.first { $0.label == "全部文字" }?.value.contains(key) ?? true), "全部文字里的 Key 打码")
+    check(!f.contains { $0.label != "全部文字" && $0.value.contains(key) }, "带 Key 的不给一键复制")
+    check(!ShotText.findings(lines: ["数据库 " + conn]).contains { $0.label == "网址" }, "带密码的连接串不当网址给")
+    check(ShotText.findings(lines: []).isEmpty, "没认出字就什么都不给")
+    check(ShotText.findings(lines: ["~/code/shop-web ❯ npm run dev -- --port 3001"]).first { $0.label == "命令" }?.value == "npm run dev -- --port 3001", "提示符后面的命令认得出")
+    check(ShotText.findings(lines: ["~/code/shop-web 》npm run dev -- --port 3001"]).contains { $0.label == "命令" }, "认字把提示符认成》也行")
+}
+
 // 用真实的 SideNotes 库试跑导入，只输出统计数字（不输出任何内容）。REACH_IMPORT_STATS=1 时才跑，数据进临时目录。
 if ProcessInfo.processInfo.environment["REACH_IMPORT_STATS"] == "1", let url = SideNotesImporter.available {
     let st = try! Store(vault: try! Vault.open())

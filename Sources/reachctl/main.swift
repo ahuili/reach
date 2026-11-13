@@ -179,7 +179,8 @@ case "status":
     if r["error"] != nil { fail(r) }
     func yes(_ k: String) -> String { (r[k] as? Bool ?? false) ? "是" : "否" }
     out("最近复制 \(r["clips"] ?? 0) 条，留存 \(r["kept"] ?? 0) 条（\(r["folders"] ?? 0) 个文件夹），其中含密钥 \(r["sensitive"] ?? 0) 条")
-    out("快捷键 ⇧⌘V 注册成功：\(yes("hotkey"))；⌃⌥V：\(yes("hotkey2"))")
+    out("打开侧栏 \((r["panellabel"] as? String) ?? "⇧⌘V") 注册成功：\(yes("hotkey"))；备用 ⌃⌥V：\(yes("hotkey2"))")
+    out("截图快捷键 \((r["shotlabel"] as? String) ?? "⌃⌥A")：\(yes("shotkey"))；屏幕录制权限：\(yes("screen"))")
     out("自动粘贴（辅助功能权限）：\(yes("autopaste"))；暂停记录：\(yes("paused"))")
     out("看到的 Agent 会话：\(r["agents"] ?? 0)；已连接 Claude Code：\(yes("claude"))，Codex：\(yes("codex"))，命令行已安装：\(yes("cli"))")
     out("开机自动打开：\(yes("login"))")

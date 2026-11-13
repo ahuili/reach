@@ -1,6 +1,6 @@
 #!/bin/zsh
 # 建一张本机自用的代码签名证书（自签名，只在你这台 Mac 上有效），放进登录钥匙串。
-# 有了它，scripts/build-app.sh 签出来的身份就固定了：重新构建后钥匙串和辅助功能的授权不会失效。
+# 有了它，scripts/build-app.sh 签出来的身份就固定了：重新构建后辅助功能、屏幕录制的授权不会失效。
 # 用法：scripts/make-cert.sh ["证书名"]   默认名「Reach Local Signing」，建好后把 scripts/repo.env 里的 SIGN_IDENTITY 改成它
 set -euo pipefail
 NAME="${1:-Reach Local Signing}"

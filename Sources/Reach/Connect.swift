@@ -192,7 +192,28 @@ struct SettingsView: View {
                 Text("鼠标滑到把手上或点一下就打开侧栏，上下拖可以挪位置。旁边紧挨着另一块屏、边缘碰不到时用它。").font(.caption).foregroundStyle(.secondary)
                 Toggle("鼠标甩到屏幕边缘时滑出", isOn: $s.hotEdge)
                 Picker("在哪一侧", selection: $s.edgeLeft) { Text("右边").tag(false); Text("左边").tag(true) }.pickerStyle(.segmented)
-                Text("快捷键：⇧⌘V（被别的 App 占用时用 ⌃⌥V）").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("快捷键") {
+                LabeledContent("打开侧栏") { KeyRecorder(combo: $s.panelKey, fallback: KeyCombo.defaultPanel) }
+                if let app = NSApp.delegate as? AppDelegate, app.appliedKeys?.0 == s.panelKey, !app.hotkeyOK {
+                    Text("这组键被别的 App 占用了（多半是 Paste），换一个试试。").font(.caption).foregroundStyle(Palette.warn)
+                }
+                Toggle("用快捷键截图", isOn: $s.shotHotkey)
+                if s.shotHotkey {
+                    LabeledContent("截图") { KeyRecorder(combo: $s.shotKey, fallback: KeyCombo.defaultShot) }
+                    if s.shotKey == s.panelKey {
+                        Text("和打开侧栏用的是同一组键，换一个。").font(.caption).foregroundStyle(Palette.warn)
+                    } else if let app = NSApp.delegate as? AppDelegate, app.appliedKeys?.1 == s.shotKey, !app.shotHotkeyOK {
+                        Text("这组键被别的 App 占用了，换一个试试。").font(.caption).foregroundStyle(Palette.warn)
+                    }
+                }
+                Text("点一下按钮，再按下想用的组合键（要带 ⌘ ⌃ ⌥ 之一，或者 F1–F12）；Esc 取消。⌃⌥V 一直可以打开侧栏，作备用。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("截图") {
+                Toggle("截图里认出的密钥自动打码", isOn: $s.shotRedact)
+                Text("截完先认字：Key、密码、Token、带密码的连接串所在的位置直接打上马赛克，工具栏上点一下可以取消。截图需要「屏幕录制」权限。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("粘贴") {
                 Toggle("普通的 ⌘V 也按目标窗口调整格式", isOn: $s.ambientFormat)
@@ -231,6 +252,7 @@ struct SettingsView: View {
                 app.panelController.refreshHandles()
                 if new.agentRail, !model.rail.running { model.rail.start() } else if !new.agentRail, model.rail.running { model.rail.stop() }
                 if new.launchAtLogin != LoginItem.enabled { LoginItem.set(new.launchAtLogin) }
+                if let a = app.appliedKeys, a.0 != new.panelKey || a.1 != new.shotKey || a.2 != new.shotHotkey { app.applyHotkeys() }
             }
         }
     }
@@ -243,5 +265,60 @@ struct SettingsView: View {
             catch { status = "没通：\(error)" }
             testing = false
         }
+    }
+}
+
+/// 录快捷键：点一下，按下新的组合键。要带 ⌘ ⌃ ⌥ 之一（或者是 F 键），Esc 取消
+struct KeyRecorder: View {
+    @Binding var combo: KeyCombo
+    let fallback: KeyCombo
+    @State private var recording = false
+    @State private var monitor: Any?
+
+    private static let names: [UInt16: String] = [
+        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
+        49: "空格", 36: "↩", 48: "⇥", 51: "⌫", 123: "←", 124: "→", 125: "↓", 126: "↑",
+        29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
+    ]
+    private static let fKeys: Set<UInt16> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { recording ? stop() : start() } label: {
+                Text(recording ? "按下新的快捷键…" : combo.label)
+                    .font(.system(size: 12.5, weight: .medium)).monospacedDigit()
+                    .frame(minWidth: 120)
+            }
+            if combo != fallback && !recording {
+                Button("恢复默认") { combo = fallback }.buttonStyle(.link)
+            }
+        }
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        recording = true
+        (NSApp.delegate as? AppDelegate)?.suspendHotkeys(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            if e.keyCode == 53 { stop(); return nil }
+            let f = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            var mods = 0, label = ""
+            if f.contains(.control) { mods |= 4096; label += "⌃" }
+            if f.contains(.option) { mods |= 2048; label += "⌥" }
+            if f.contains(.shift) { mods |= 512; label += "⇧" }
+            if f.contains(.command) { mods |= 256; label += "⌘" }
+            guard mods & (4096 | 2048 | 256) != 0 || Self.fKeys.contains(e.keyCode) else { NSSound.beep(); return nil }
+            let key = Self.names[e.keyCode] ?? (e.characters(byApplyingModifiers: [])?.uppercased() ?? "")
+            guard !key.isEmpty, !key.unicodeScalars.contains(where: { $0.value < 32 }) else { NSSound.beep(); return nil }
+            combo = KeyCombo(code: Int(e.keyCode), mods: mods, label: label + key)
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
+        if recording { recording = false; (NSApp.delegate as? AppDelegate)?.suspendHotkeys(false) }
     }
 }

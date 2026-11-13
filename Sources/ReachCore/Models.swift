@@ -103,6 +103,18 @@ public struct AISettings: Codable, Equatable {
     public var isReady: Bool { enabled && !baseURL.isEmpty && !model.isEmpty }
 }
 
+/// 一组快捷键：Carbon 键码 + 修饰键（cmdKey 256、shiftKey 512、optionKey 2048、controlKey 4096），label 是显示用的「⇧⌘V」
+public struct KeyCombo: Codable, Equatable {
+    public var code: Int
+    public var mods: Int
+    public var label: String
+    public init(code: Int, mods: Int, label: String) { self.code = code; self.mods = mods; self.label = label }
+    public static let defaultPanel = KeyCombo(code: 9, mods: 256 | 512, label: "⇧⌘V")
+    public static let defaultShot = KeyCombo(code: 0, mods: 4096 | 2048, label: "⌃⌥A")
+    /// 备用的打开侧栏快捷键（⇧⌘V 常被 Paste 占着）
+    public static let backupPanel = KeyCombo(code: 9, mods: 4096 | 2048, label: "⌃⌥V")
+}
+
 public struct Settings: Codable, Equatable {
     public var paused = false
     /// 普通 ⌘V 时也按目标窗口调整格式
@@ -121,6 +133,13 @@ public struct Settings: Codable, Equatable {
     public var launchAtLogin = true
     /// Agent 进展栏（试验中，默认关）
     public var agentRail = false
+    /// 打开侧栏的快捷键（设置里可以录新的）
+    public var panelKey = KeyCombo.defaultPanel
+    /// 截图快捷键开关和按键
+    public var shotHotkey = true
+    public var shotKey = KeyCombo.defaultShot
+    /// 截图里认出的密钥自动打码
+    public var shotRedact = true
     public var ai = AISettings()
     public init() {}
 
@@ -137,6 +156,10 @@ public struct Settings: Codable, Equatable {
         handleY = try c.decodeIfPresent(Double.self, forKey: .handleY) ?? 0.5
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
         agentRail = try c.decodeIfPresent(Bool.self, forKey: .agentRail) ?? false
+        shotHotkey = try c.decodeIfPresent(Bool.self, forKey: .shotHotkey) ?? true
+        panelKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .panelKey)) ?? KeyCombo.defaultPanel
+        shotKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .shotKey)) ?? KeyCombo.defaultShot
+        shotRedact = try c.decodeIfPresent(Bool.self, forKey: .shotRedact) ?? true
         ai = try c.decodeIfPresent(AISettings.self, forKey: .ai) ?? AISettings()
     }
 }

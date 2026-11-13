@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var organizer: Organizer!
     var rail: AgentRail!
     var bridge: Bridge!
+    var shot: ShotController!
     let toast = Toast()
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var purgeTimer: Timer?
     private(set) var hotkeyOK = false
     private(set) var hotkey2OK = false
+    private(set) var shotHotkeyOK = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // 已经有一个在跑：让它把侧栏打开，自己退出
@@ -34,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do { store = try Store(vault: try Vault.open(migrated: migrated)) } catch {
             let a = NSAlert()
             a.messageText = "手边打不开自己的数据"
-            a.informativeText = "读不到钥匙串里的数据库密钥（\(error)）。如果系统刚才问过是否允许手边访问钥匙串，请选「始终允许」后重新打开。"
+            a.informativeText = "读不到数据库密钥（\(error)）。从旧版升级时，手边会把钥匙串里的密钥最后读一次、搬到数据目录；如果系统刚才问过是否允许，请选「允许」后重新打开。"
             a.runModal()
             NSApp.terminate(nil); return
         }
@@ -47,7 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rail = AgentRail(model: model)
         bridge = Bridge(model: model)
         if ProcessInfo.processInfo.environment["REACH_KEYFILE"] != "1" { ambient = Ambient(model: model, monitor: monitor) }
+        shot = ShotController(model: model, monitor: monitor)
         model.paster = paster
+        model.shot = shot
         model.organizer = organizer
         model.rail = rail
         model.hidePanel = { [weak self] in self?.panelController.hide() }
@@ -64,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 测试模式（REACH_KEYFILE=1，数据在临时目录）：不碰真实剪贴板、不抢快捷键、侧栏画在屏幕外
         let test = ProcessInfo.processInfo.environment["REACH_KEYFILE"] == "1"
         panelController.testMode = test
+        shot.testMode = test
+        bridge.shot = shot
         bridge.testMode = test
         bridge.monitor = monitor
         store.purgeExpired()
@@ -75,10 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if (self?.model.store.purgeExpired() ?? 0) > 0 { self?.model.rebuild() }
         }
 
-        let ok = test || HotKey.register(id: 1, key: UInt32(kVK_ANSI_V), mods: UInt32(cmdKey | shiftKey)) { [weak self] in self?.panelController.toggle() }
-        hotkeyOK = ok && !test
-        if !test { hotkey2OK = HotKey.register(id: 2, key: UInt32(kVK_ANSI_V), mods: UInt32(controlKey | optionKey)) { [weak self] in self?.panelController.toggle() } }
-        if !ok { toast.show("⇧⌘V 被别的 App 占着（多半是 Paste）。先用 ⌃⌥V 叫出手边，或者退出 Paste。") }
+        if !test {
+            applyHotkeys()
+            if !hotkeyOK { toast.show("\(model.settings.panelKey.label) 被别的 App 占着（多半是 Paste）。先用 ⌃⌥V 叫出手边，或者在设置里换一个快捷键。") }
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "手边")
@@ -100,9 +106,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             importSideNotes()
         }
         if ProcessInfo.processInfo.environment["REACH_SHOW"] == "1" { panelController.show(.menu) }
+        // 新版本第一次打开：告诉一声截图快捷键
+        if !test, !UserDefaults.standard.bool(forKey: "shotIntroShown") {
+            UserDefaults.standard.set(true, forKey: "shotIntroShown")
+            let label = model.settings.shotKey.label
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self else { return }
+                self.toast.show(self.shotHotkeyOK ? "按 \(label) 截图，截图里的密钥会自动打码（设置里可以换快捷键）" : "新功能：截图。\(label) 被别的 App 占用了，可以在设置里换一个快捷键")
+            }
+        }
     }
 
     func applicationWillTerminate(_ note: Notification) { bridge?.stop() }
+
+    // MARK: 截图
+
+    @objc func takeShot() {
+        // 从菜单点的：等菜单收起再冻住屏幕
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.shot.start() }
+    }
+
+    /// 按设置注册快捷键：1 打开侧栏，2 备用的 ⌃⌥V，3 截图。注册不上（被别的 App 占了）时对应的 OK 为 false，设置里会提示换一个
+    func applyHotkeys() {
+        for id: UInt32 in [1, 2, 3] { HotKey.unregister(id: id) }
+        let s = model.settings
+        hotkeyOK = HotKey.register(id: 1, key: UInt32(s.panelKey.code), mods: UInt32(s.panelKey.mods)) { [weak self] in self?.panelController.toggle() }
+        let backup = KeyCombo.backupPanel
+        hotkey2OK = s.panelKey != backup && s.shotKey != backup
+            && HotKey.register(id: 2, key: UInt32(backup.code), mods: UInt32(backup.mods)) { [weak self] in self?.panelController.toggle() }
+        shotHotkeyOK = s.shotHotkey && s.shotKey != s.panelKey
+            && HotKey.register(id: 3, key: UInt32(s.shotKey.code), mods: UInt32(s.shotKey.mods)) { [weak self] in self?.shot.start() }
+        appliedKeys = (s.panelKey, s.shotKey, s.shotHotkey)
+    }
+    private(set) var appliedKeys: (KeyCombo, KeyCombo, Bool)?
+
+    /// 设置里录快捷键时先放开，免得按下去直接触发
+    func suspendHotkeys(_ on: Bool) {
+        if on { for id: UInt32 in [1, 2, 3] { HotKey.unregister(id: id) } } else { applyHotkeys() }
+    }
+
+    @objc func toggleShotRedact() { model.settings.shotRedact.toggle() }
 
     // MARK: 菜单
 
@@ -116,7 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let s = model.settings
-        add(menu, "打开手边（⇧⌘V）", #selector(openPanel))
+        add(menu, hotkeyOK ? "打开手边（\(s.panelKey.label)）" : "打开手边", #selector(openPanel))
+        add(menu, shotHotkeyOK ? "截图（\(s.shotKey.label)）" : "截图", #selector(takeShot))
+        add(menu, "截图时自动遮住密钥", #selector(toggleShotRedact), checked: s.shotRedact)
         menu.addItem(.separator())
         add(menu, "暂停记录", #selector(togglePause), checked: s.paused)
         add(menu, "普通 ⌘V 也按目标窗口调整格式", #selector(toggleAmbient), checked: s.ambientFormat)

@@ -173,7 +173,7 @@ final class ClipboardMonitor {
 // MARK: 粘贴
 
 enum PasteMode {
-    case smart, plain, raw, cleanText, rich, codeOnly, jsonPretty, oneLine, ocr, login, shotPath
+    case smart, plain, raw, cleanText, rich, codeOnly, jsonPretty, oneLine, ocr, login, shotPath, annotate, pin
     case value(String, secret: Bool)
     case ai(String)
     case filled(String)
@@ -204,6 +204,8 @@ final class Paster {
             out.append(PasteOption(label: "图片", detail: "↩", icon: "photo", mode: .smart))
             out.append(PasteOption(label: "存成文件，贴路径", detail: "给终端里的 Agent", icon: "terminal", mode: .shotPath))
             if let o = it.ocr, !o.isEmpty { out.append(PasteOption(label: "图里的文字", detail: Text.firstLine(o, max: 30) ?? "", icon: "text.viewfinder", mode: .ocr)) }
+            out.append(PasteOption(label: "标注一下", detail: "画框、箭头、打码", icon: "pencil.tip.crop.circle", mode: .annotate))
+            out.append(PasteOption(label: "钉在屏幕上", detail: "对着看", icon: "pin", mode: .pin))
             return out
         }
         if it.ctype == .file {
@@ -279,7 +281,7 @@ final class Paster {
         case .value(let v, let secret): p.plain = v; p.containsSecret = secret; return p
         case .filled(let t): p.plain = t
         case .ocr: p.plain = it.ocr ?? ""
-        case .login, .ai, .shotPath: return nil
+        case .login, .ai, .shotPath, .annotate, .pin: return nil
         }
         p.containsSecret = !secrets.isEmpty && secrets.contains { p.plain.contains($0.value) }
         return p
@@ -304,6 +306,8 @@ final class Paster {
     func paste(_ it: Item, mode: PasteMode) {
         let target = TargetKind.of(bundle: model.targetBundle)
         if case .login = mode { login(it); return }
+        if case .annotate = mode { model.hidePanel(); model.shot.annotate(it); return }
+        if case .pin = mode { model.hidePanel(); model.shot.pin(it); return }
         if case .ai(let instruction) = mode { aiPaste(it, instruction: instruction); return }
         guard let p = payload(it, mode: mode, target: target) else { model.toast("这条贴不了"); return }
         // 密钥要贴进聊天窗口或 AI 对话框：先拦一下

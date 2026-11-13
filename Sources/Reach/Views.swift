@@ -555,6 +555,8 @@ struct FooterView: View {
                 Text("↩ 贴   → 只贴一部分   空格 多选   Tab 切换").font(.system(size: 10.5)).foregroundStyle(.tertiary).lineLimit(1)
                 Spacer(minLength: 0)
                 if model.settings.paused { TagView(text: "已暂停记录", color: Palette.warn) }
+                Button { model.hidePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { model.shot.start() } } label: { Image(systemName: "viewfinder").font(.system(size: 13)) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("截图（\(model.settings.shotKey.label)）")
                 Button { model.newNote() } label: { Image(systemName: "square.and.pencil").font(.system(size: 13)) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("新建留存（⌘N）")
                 Button { (NSApp.delegate as? AppDelegate)?.openSettings() } label: { Image(systemName: "gearshape").font(.system(size: 13)) }

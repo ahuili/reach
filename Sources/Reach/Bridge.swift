@@ -9,6 +9,7 @@ final class Bridge {
     private var server: IPCServer?
     var testMode = false
     weak var monitor: ClipboardMonitor?
+    weak var shot: ShotController?
 
     init(model: AppModel) { self.model = model }
 
@@ -55,7 +56,7 @@ final class Bridge {
             let app = NSApp.delegate as? AppDelegate
             reply(["ok": true, "clips": store.clips.count, "kept": store.kept.count, "folders": store.folders.count,
                    "sensitive": store.items.values.filter { $0.sensitive }.count,
-                   "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "autopaste": Keys.trusted,
+                   "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "shotkey": app?.shotHotkeyOK ?? false, "shotlabel": model.settings.shotKey.label, "panellabel": model.settings.panelKey.label, "screen": ShotGrab.allowed, "autopaste": Keys.trusted,
                    "paused": store.settings.paused, "agents": model.agents.count,
                    "claude": Connect.claudeConnected, "codex": Connect.codexConnected, "cli": Connect.cliInstalled, "login": LoginItem.enabled])
         case "import.sidenotes":
@@ -150,6 +151,34 @@ final class Bridge {
             app?.panelController.show(.approval)
             reply(["ok": true, "rows": model.rows.map(\.id).count, "approvals": model.approvals.map(\.title), "confirm": model.confirmSecret != nil,
                    "options": (model.options ?? []).map { $0.label + " " + $0.detail }, "agents": model.agents.map { "\($0.agent.name)|\($0.project)|\($0.state.rawValue)|\($0.detail)" }])
+        case "debug.shot":
+            // 截图界面的测试入口：拿一张图当冻住的屏幕，不需要屏幕录制权限
+            guard let shot else { reply(["error": "no shot"]); return }
+            func img(_ k: String) -> CGImage? { (req[k] as? String).flatMap { NSImage(contentsOfFile: $0) }?.cgImage(forProposedRect: nil, context: nil, hints: nil) }
+            if let i = img("fake") { shot.close(reactivate: false); shot.openFake(i) }
+            if let i = img("annotate") { shot.close(reactivate: false); shot.annotate(image: i, sourceName: "截图", bundle: nil) }
+            if let r = req["select"] as? [Double], r.count == 4 { shot.fakeSelect(CGRect(x: r[0], y: r[1], width: r[2], height: r[3])) }
+            if let t = req["tool"] as? String { shot.debugTool(t) }
+            if let h = req["hint"] as? String { shot.debugHint(h.isEmpty ? nil : h) }
+            if let r = req["reselect"] as? [Double], r.count == 4 { shot.debugReselect(CGRect(x: r[0], y: r[1], width: r[2], height: r[3])) }
+            if let m = req["mark"] as? [String: Any], let t = ShotTool(rawValue: m["tool"] as? String ?? ""), let r = m["rect"] as? [Double], r.count == 4 {
+                let k = shot.debugPixel
+                let rect = CGRect(x: r[0] * k, y: r[1] * k, width: r[2] * k, height: r[3] * k)
+                var mk = ShotMark(tool: t, rect: rect, color: ShotSession.colors[m["color"] as? Int ?? 0], width: (t == .text ? 18 : t == .mosaic ? 9 : 3) * k)
+                if t == .arrow { mk.points = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)] }
+                if t == .step { mk.number = m["number"] as? Int ?? 1 }
+                mk.text = m["text"] as? String ?? ""
+                shot.debugMark(mk)
+            }
+            if let a = req["act"] as? String {
+                switch a {
+                case "copy": shot.act(.copy); case "basket": shot.act(.basket); case "pin": shot.act(.pin)
+                case "cancel": shot.act(.cancel); case "redact": shot.act(.toggleRedact); case "undo": shot.act(.undo)
+                default: break
+                }
+            }
+            if let p = req["snap"] as? String { _ = shot.snapshot(to: p) }
+            reply(shot.debugState().merging(["ok": true]) { a, _ in a })
         case "debug.snapshot":
             let ok = app?.panelController.snapshot(to: req["path"] as? String ?? "") ?? false
             reply(["ok": ok])

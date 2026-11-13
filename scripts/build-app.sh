@@ -63,7 +63,7 @@ if security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY
 else
   codesign --force -s - --identifier $BUNDLE_ID.ctl $APP/Contents/MacOS/reachctl
   codesign --force -s - $APP
-  echo "⚠️ 没找到证书「$SIGN_IDENTITY」，用临时签名：每次重新构建后系统会再问一次钥匙串和辅助功能。运行 scripts/make-cert.sh 建一张就好。"
+  echo "⚠️ 没找到证书「$SIGN_IDENTITY」，用临时签名：每次重新构建后系统会再问一次辅助功能和屏幕录制。运行 scripts/make-cert.sh 建一张就好。"
 fi
 echo "✓ $APP"
 
