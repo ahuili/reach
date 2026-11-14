@@ -70,6 +70,9 @@ enum ShotGrab {
 struct ShotReading {
     var lines: [String] = []
     var secretBoxes: [CGRect] = []
+    /// 每行字所在的位置（图片像素，左上原点），和 lines 一一对应；原位翻译按它盖上译文
+    var lineBoxes: [CGRect] = []
+    var lineSecret: [Bool] = []
 
     static func read(_ img: CGImage) -> ShotReading {
         let req = VNRecognizeTextRequest()
@@ -82,7 +85,11 @@ struct ShotReading {
         for o in req.results ?? [] {
             guard let c = o.topCandidates(1).first else { continue }
             out.lines.append(c.string)
-            for ns in ShotText.secretRanges(in: c.string) {
+            let lb = o.boundingBox
+            out.lineBoxes.append(CGRect(x: lb.minX * W, y: (1 - lb.maxY) * H, width: lb.width * W, height: lb.height * H))
+            let ranges = ShotText.secretRanges(in: c.string)
+            out.lineSecret.append(!ranges.isEmpty)
+            for ns in ranges {
                 guard let r = Range(ns, in: c.string), let bb = try? c.boundingBox(for: r)?.boundingBox else { continue }
                 let pad = max(3, bb.height * H * 0.18)
                 out.secretBoxes.append(CGRect(x: bb.minX * W - pad, y: (1 - bb.maxY) * H - pad,

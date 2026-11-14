@@ -53,7 +53,7 @@ public enum SecretDetector {
         return -freq.values.reduce(0) { $0 + ($1 / n) * log2($1 / n) }
     }
 
-    /// 一个孤立的词像不像密码。loose 用于留存的笔记（宁可多认），否则只认长的高熵串。
+    /// 一个孤立的词像不像密码。loose 用于抽屉里的笔记（宁可多认），否则只认长的高熵串。
     static func looksLikePassword(_ t: String, loose: Bool) -> Bool {
         let ns = t as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -134,6 +134,11 @@ public enum SecretDetector {
         return "••••••"
     }
 
+    /// 列表里分辨用：长的露头尾，短的（多是密码）只说几位，不露字
+    public static func maskHint(_ v: String) -> String {
+        v.count >= 16 ? maskValue(v) : "•••••• \(v.count) 位"
+    }
+
     /// 显示用：把密钥位置打码
     public static func mask(_ text: String, loose: Bool = false, ignoring: [String] = []) -> String {
         replace(text, loose: loose, ignoring: ignoring) { maskValue($0.value) }
@@ -160,6 +165,11 @@ public struct Field: Equatable {
     public var label: String
     public var value: String
     public var location: Int
+    /// 一条里有好几个密钥时，从上下文取的名字（同一行前面的字，或上面一行的小标题），用来分清哪个是哪个
+    public var name: String? = nil
+
+    /// 选项里显示：「OpenAI」API Key
+    public var displayLabel: String { name.map { "「\($0)」\(label)" } ?? label }
 }
 
 /// 把一条笔记拆成可以单独贴的字段：网址、账号、密码、主机、命令
@@ -197,9 +207,77 @@ public enum FieldParser {
         for m in cmdRe.matches(in: text, range: full) {
             out.append(Field(kind: .command, label: "命令", value: ns.substring(with: m.range(at: 1)), location: m.range.location))
         }
-        for s in secrets {
-            out.append(Field(kind: .secret, label: s.label, value: s.value, location: s.range.location))
+        let names = secrets.count > 1 ? SecretNamer.names(for: secrets, in: text) : []
+        for (i, s) in secrets.enumerated() {
+            out.append(Field(kind: .secret, label: s.label, value: s.value, location: s.range.location, name: names.indices.contains(i) ? names[i] : nil))
         }
         return out.sorted { $0.location < $1.location }
+    }
+}
+
+/// 给一条里的几个密钥起名字：同一行密钥前面的字（去掉"密码：""API_KEY="这类），没有就用上面紧挨着的小标题行
+public enum SecretNamer {
+    private static func rx(_ p: String, _ o: NSRegularExpression.Options = []) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: o) }
+    private static let lead = rx("^(?:[-*•·>#]+|\\d+[.)、]|export)\\s*", [.caseInsensitive])
+    private static let urlTail = rx("[A-Za-z][A-Za-z0-9+.\\-]*://\\S*$")
+    private static let trailSep = rx("[\\s:=：,，;；|/\\-—（(\\[【]+$")
+    private static let trailWord = rx("(?:(?<![A-Za-z])|[\\s_\\-.]+)(?:api[\\s_\\-]?key|access[\\s_\\-]?key(?:[\\s_\\-]?id)?|secret[\\s_\\-]?(?:access[\\s_\\-]?)?key|app[\\s_\\-]?secret|client[\\s_\\-]?secret|secret|token|password|passwd|pwd|key|密码|口令|密钥|令牌|是|为|的)$", [.caseInsensitive])
+    private static let accountLead = rx("^(?:账号|帐号|账户|用户名|用户|user(?:name)?|account|login)\\s*(?:[:=：]|是|为)?\\s*", [.caseInsensitive])
+
+    static func strip(_ re: NSRegularExpression, _ s: String) -> String {
+        re.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length), withTemplate: "")
+    }
+
+    /// 前缀洗干净：去掉列表记号、行尾的分隔符和"密码""key"这类泛称
+    public static func clean(_ raw: String) -> String {
+        var t = raw.trimmingCharacters(in: .whitespaces)
+        t = strip(urlTail, t)
+        t = strip(lead, t)
+        while true {
+            let n = strip(trailWord, strip(trailSep, t)).trimmingCharacters(in: .whitespaces)
+            if n == t { break }
+            t = n
+        }
+        t = t.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'`*_#"))
+        if t.count > 18 { t = "…" + String(t.suffix(17)) }
+        return t
+    }
+
+    public static func names(for secrets: [SecretSpan], in text: String) -> [String?] {
+        let ns = text as NSString
+        var out: [String?] = secrets.map { s in
+            let line = ns.lineRange(for: NSRange(location: s.range.location, length: 0))
+            // 同一行前面如果还有一个密钥，从它后面开始算
+            let start = secrets.map { NSMaxRange($0.range) }.filter { $0 > line.location && $0 <= s.range.location }.max() ?? line.location
+            let before = clean(ns.substring(with: NSRange(location: start, length: s.range.location - start)))
+            if !before.isEmpty { return before }
+            // 这一行只有密钥（或"密码：xxx"）：在同一段里往上找。小标题（## 生产、生产：）优先，
+            // 其次是紧挨着的一行，账号行去掉"账号"两个字（root@10.0.3.21 的密码），网址行太长不用
+            var loc = line.location, near: String?, seenText = false, steps = 0
+            while loc > 0, steps < 6 {
+                let prev = ns.lineRange(for: NSRange(location: loc - 1, length: 0))
+                let raw = ns.substring(with: prev).trimmingCharacters(in: .whitespacesAndNewlines)
+                loc = prev.location
+                if raw.isEmpty { if seenText { break } else { continue } }
+                seenText = true; steps += 1
+                if secrets.contains(where: { NSIntersectionRange($0.range, prev).length > 0 }) { break }
+                let c = clean(strip(accountLead, raw))
+                if raw.hasPrefix("#") || raw.hasSuffix(":") || raw.hasSuffix("：") {
+                    if !c.isEmpty { return c }
+                    break
+                }
+                if near == nil, !c.isEmpty, !raw.contains("://"), raw.count <= 40 { near = c }
+            }
+            return near
+        }
+        // 名字一样的，后面加上第几个
+        var seen: [String: Int] = [:]
+        let keys = zip(out, secrets).map { "\($0.0 ?? "")|\($0.1.label)" }
+        let dup = Set(keys.filter { k in keys.filter { $0 == k }.count > 1 })
+        for i in out.indices where dup.contains(keys[i]) {
+            seen[keys[i], default: 0] += 1
+            out[i] = (out[i].map { $0 + " " } ?? "") + "第\(seen[keys[i]]!)个"
+        }
+        return out
     }
 }

@@ -24,7 +24,6 @@ enum Row: Identifiable {
     case header(String, String)
     case day(String)
     case approval(Approval)
-    case agent(AgentSession)
     case group(id: String, title: String, subtitle: String, count: Int, expanded: Bool)
     case folder(id: String, name: String, count: Int, expanded: Bool)
     case item(Item, indent: Bool)
@@ -35,7 +34,6 @@ enum Row: Identifiable {
         case .header(let t, _): return "h:" + t
         case .day(let t): return "d:" + t
         case .approval(let a): return "ap:" + a.id
-        case .agent(let s): return "ag:" + s.id
         case .group(let id, _, _, _, _): return "g:" + id
         case .folder(let id, _, _, _): return "f:" + id
         case .item(let it, _): return "i:" + it.id
@@ -66,6 +64,18 @@ struct EditorState {
     var newFolder: String = ""
 }
 
+/// 放进抽屉那一页：要存的是哪几条，搜索框里打的字，选中第几项
+struct SaveState {
+    var ids: [String]
+    var query = ""
+    var index = 0
+}
+
+enum SaveChoice: Hashable {
+    case new, each
+    case append(String)
+}
+
 struct TemplateState {
     var item: Item
     var slots: [Template.Slot]
@@ -78,17 +88,17 @@ final class AppModel: ObservableObject {
     @Published var rows: [Row] = []
     @Published var selection: String?
     @Published var basket: [String] = []
-    /// 侧栏两页：最近复制 / 留存。搜索时两页一起搜
+    /// 侧栏两页：最近复制 / 抽屉。搜索时两页一起搜
     @Published var tab: Tab = .recent { didSet { if tab != oldValue { selection = nil; rebuild() } } }
-    /// 留存页的文件夹筛选：nil = 全部，"@common" = 常用，否则是文件夹 id
+    /// 抽屉页的文件夹筛选：nil = 全部，"@common" = 常用，否则是文件夹 id
     @Published var folderFilter: String? { didSet { if folderFilter != oldValue { selection = nil; rebuild() } } }
     /// 多选时 shift 点击的起点
     var anchor: String?
     @Published var approvals: [Approval] = []
-    @Published var agents: [AgentSession] = []
     @Published var options: [PasteOption]?
     @Published var optionIndex = 0
     @Published var editor: EditorState?
+    @Published var saving: SaveState?
     /// 管理文件夹的那一页
     @Published var managingFolders = false
     @Published var template: TemplateState?
@@ -103,7 +113,6 @@ final class AppModel: ObservableObject {
     var expandedGroups: Set<String> = []
     var collapsedGroups: Set<String> = []
     var expandedFolders: Set<String> = []
-    var dismissedAgents: Set<String> = []
     var semantic: [String] = []
 
     // 由 AppDelegate 接上
@@ -111,7 +120,6 @@ final class AppModel: ObservableObject {
     var shot: ShotController!
     var links: LinkRouter!
     var organizer: Organizer!
-    var rail: AgentRail!
     /// SideNotes 里还没搬过来的笔记数（有才显示搬家提示）
     @Published var sideNotesHint: Int?
     var importSideNotes: () -> Void = {}
@@ -135,21 +143,12 @@ final class AppModel: ObservableObject {
     func rebuild() {
         var out: [Row] = []
         for a in approvals { out.append(.approval(a)) }
-        let visibleAgents = store.settings.agentRail ? agents.filter { !dismissedAgents.contains(agentKey($0)) } : []
-        // 在搜东西时不显示 Agent 栏，结果排最前
-        if !visibleAgents.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
-            let quota = visibleAgents.compactMap(\.quota).first ?? ""
-            out.append(.header("Agent", quota))
-            for s in visibleAgents.prefix(6) { out.append(.agent(s)) }
-        }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { out += tab == .recent ? recentRows() : keptRows() } else { out += searchRows(q) }
         rows = out
         let ids = selectable
         if selection == nil || !ids.contains(selection!) { selection = ids.first }
     }
-
-    func agentKey(_ s: AgentSession) -> String { s.id + "@" + String(Int(s.updatedAt.timeIntervalSince1970)) }
 
     /// 最近复制：按天分段，同一段时间连着复制的收成一组
     private func recentRows() -> [Row] {
@@ -191,11 +190,11 @@ final class AppModel: ObservableObject {
         return out.map { (id: $0.0, name: $0.1, count: $0.2) }
     }
 
-    /// 留存：上面一排文件夹标签筛选，下面按最近用过排
+    /// 抽屉：上面一排文件夹标签筛选，下面按最近用过排
     private func keptRows() -> [Row] {
         let kept = store.kept
         guard !kept.isEmpty else {
-            return [.note("留存里还是空的。在最近复制里按 ⌘S 留下一条，或按 ⌘N 直接写一条。")]
+            return [.note("抽屉里还是空的。在最近复制里按 ⌘S 放进来一条，或按 ⌘N 直接写一条。")]
         }
         let its: [Item]
         switch folderFilter {
@@ -253,7 +252,7 @@ final class AppModel: ObservableObject {
         let hits = scored.prefix(60).map(\.0)
         var out: [Row] = []
         let keptHits = hits.filter { $0.kind == .kept }, clipHits = hits.filter { $0.kind == .clip }, visitHits = hits.filter { $0.kind == .visit }
-        if !keptHits.isEmpty { out.append(.header("留存", "\(keptHits.count)")); out += keptHits.map { .item($0, indent: false) } }
+        if !keptHits.isEmpty { out.append(.header("抽屉", "\(keptHits.count)")); out += keptHits.map { .item($0, indent: false) } }
         if !clipHits.isEmpty { out.append(.header("最近复制", "\(clipHits.count)")); out += clipHits.map { .item($0, indent: false) } }
         if !visitHits.isEmpty { out.append(.header("点过的链接", "\(visitHits.count)")); out += visitHits.map { .item($0, indent: false) } }
         // 字面搜不到几条时，补上"意思相近"的
@@ -309,7 +308,7 @@ final class AppModel: ObservableObject {
     func activate(_ it: Item, plain: Bool = false) {
         // 点过的链接：回车按原来的去处再开一次（→ 里可以贴网址、换个地方开）
         if it.kind == .visit, !plain { hidePanel(); links?.reopen(it); return }
-        // 账号密码类的留存，回车就是贴密码，不当成带空位的模板
+        // 抽屉里账号密码类的，回车就是贴密码，不当成带空位的模板
         if !plain, it.kind == .kept, !it.sensitive, it.ctype != .credential, it.ctype != .secret {
             let slots = Template.slots(in: it.text)
             if !slots.isEmpty {
@@ -326,6 +325,12 @@ final class AppModel: ObservableObject {
         optionIndex = 0
     }
 
+    /// "怎么贴"里按 ⌘C：只复制这一项，不贴、不收起侧栏
+    func copyOption(_ i: Int) {
+        guard let it = selectedItem, let o = options, o.indices.contains(i) else { return }
+        paster.copyOnly(it, mode: o[i].mode, label: o[i].label)
+    }
+
     func chooseOption(_ i: Int) {
         guard let it = selectedItem, let o = options, o.indices.contains(i) else { return }
         options = nil
@@ -333,14 +338,105 @@ final class AppModel: ObservableObject {
     }
 
     func keep(_ it: Item) {
-        guard it.kind == .clip else { toast("已经在留存里了"); return }
+        guard it.kind == .clip else { toast("已经在抽屉里了"); return }
+        keepQuietly(it)
+        rebuild()
+        toast("已放进抽屉")
+    }
+
+    private func keepQuietly(_ it: Item) {
         var k = it
         k.kind = .kept; k.expiresAt = nil; k.groupId = nil
         if k.ctype == .secret { k.sensitive = true }
         store.save(k)
-        rebuild()
-        toast("已留存")
         organizer.autoFile(k.id)
+    }
+
+    // MARK: 放进抽屉（⌘S）：存成新的一条，或加到抽屉里已有的一条后面
+
+    /// 篮子里有东西就存整篮，否则存选中的这条
+    func startSave(_ it: Item?) {
+        let ids = basket.isEmpty ? (it.map { [$0.id] } ?? []) : basket
+        guard !ids.isEmpty else { return }
+        if ids.count == 1, store.items[ids[0]]?.kind == .kept { toast("已经在抽屉里了"); return }
+        saving = SaveState(ids: ids)
+    }
+
+    /// 放进抽屉那一页的选项：新的一条、（多条时）每条单独存，再往下是抽屉里能接在后面的那些
+    var saveChoices: [SaveChoice] {
+        guard let s = saving else { return [] }
+        var out: [SaveChoice] = [.new]
+        if s.ids.count > 1 { out.append(.each) }
+        let q = s.query.trimmingCharacters(in: .whitespaces).lowercased()
+        let targets = store.kept
+            .filter { !s.ids.contains($0.id) && $0.ctype != .image && $0.ctype != .file }
+            .sorted { ($0.lastUsedAt ?? $0.updatedAt) > ($1.lastUsedAt ?? $1.updatedAt) }
+            .filter { it in
+                q.isEmpty || it.displayTitle.lowercased().contains(q) || folderName(it.folderId).lowercased().contains(q)
+                    || SecretDetector.mask(it.text, loose: true, ignoring: it.notSecret).lowercased().contains(q)
+            }
+        out += targets.prefix(60).map { .append($0.id) }
+        return out
+    }
+
+    /// 几条合成一段正文：图片用认出的字，文件用路径
+    private func mergedText(_ items: [Item]) -> String {
+        items.map { it -> String in
+            switch it.ctype {
+            case .image: return it.ocr ?? ""
+            case .file: return (it.files ?? []).joined(separator: "\n")
+            default: return it.text
+            }
+        }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+    }
+
+    /// 正文改了以后重新认密钥和类型
+    private func refresh(_ it: inout Item) {
+        it.hash = store.vault.fingerprint(Data(it.text.utf8))
+        let secrets = SecretDetector.find(in: it.text, loose: true, ignoring: it.notSecret)
+        it.sensitive = !secrets.isEmpty
+        it.ctype = secrets.isEmpty ? Classifier.classify(it.text) : (SecretDetector.isWholeSecret(it.text) ? .secret : .credential)
+    }
+
+    func finishSave(_ c: SaveChoice) {
+        guard let s = saving else { return }
+        saving = nil
+        let items = s.ids.compactMap { store.items[$0] }
+        guard !items.isEmpty else { return }
+        switch c {
+        case .new where items.count == 1:
+            keep(items[0])
+            selection = items[0].id
+        case .each, .new where mergedText(items).isEmpty:
+            let clips = items.filter { $0.kind == .clip }
+            for it in clips { keepQuietly(it) }
+            basket = []
+            rebuild()
+            toast(clips.isEmpty ? "选中的都已经在抽屉里了" : "已放进抽屉 \(clips.count) 条")
+        case .new:
+            var k = Item(kind: .kept, text: mergedText(items), origin: .manual)
+            refresh(&k)
+            store.save(k)
+            organizer.autoFile(k.id)
+            basket = []
+            selection = k.id
+            rebuild()
+            toast("已合成一条放进抽屉")
+        case .append(let id):
+            guard var t = store.items[id] else { return }
+            let add = mergedText(items)
+            guard !add.isEmpty else { toast("图片和文件接不到已有的一条后面，可以单独放进抽屉"); return }
+            t.text = t.text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + add
+            t.html = nil
+            refresh(&t)
+            store.save(t)
+            basket = []
+            rebuild()
+            toast("已加到「\(Text.truncate(shown(t.displayTitle, t), 16))」后面")
+        }
     }
 
     func remove(_ it: Item) {
@@ -417,13 +513,13 @@ final class AppModel: ObservableObject {
         toast("好，这条不再按密钥处理")
     }
 
-    /// 删文件夹：里面的留存移到未归类，不删内容
+    /// 删文件夹：里面的内容移到未归类，不删内容
     func deleteFolder(_ id: String) {
         let name = folderName(id)
         store.removeFolder(id)
         if folderFilter == id { folderFilter = nil }
         rebuild()
-        toast("已删除文件夹「\(name)」，里面的留存移到了「未归类」")
+        toast("已删除文件夹「\(name)」，里面的内容移到了「未归类」")
     }
 
     func move(_ it: Item, toFolder id: String?) {

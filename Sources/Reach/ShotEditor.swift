@@ -42,9 +42,19 @@ struct ShotMark: Identifiable, Equatable {
     var auto = false
 }
 
+/// 原位翻译：盖在一行原文上的译文（图片像素，左上原点）
+struct ShotGloss: Equatable {
+    var rect: CGRect
+    var text: String
+    var bg: NSColor
+    var fg: NSColor
+}
+
 final class ShotDoc: ObservableObject {
     let image: CGImage
     @Published private(set) var marks: [ShotMark] = []
+    /// 打开原位翻译时的译文；复制出去的图也带着
+    @Published var glosses: [ShotGloss] = []
     @Published private(set) var canUndo = false
     private var undos: [[ShotMark]] = []
     private var redos: [[ShotMark]] = []
@@ -68,13 +78,13 @@ final class ShotDoc: ObservableObject {
         undos.append(marks); redos = []; marks = next; canUndo = true
     }
 
-    func render(extra: ShotMark? = nil) -> CGImage { ShotRender.render(image, marks + (extra.map { [$0] } ?? [])) }
+    func render(extra: ShotMark? = nil) -> CGImage { ShotRender.render(image, marks + (extra.map { [$0] } ?? []), glosses: glosses) }
 }
 
 enum ShotRender {
-    static func render(_ img: CGImage, _ marks: [ShotMark]) -> CGImage {
+    static func render(_ img: CGImage, _ marks: [ShotMark], glosses: [ShotGloss] = []) -> CGImage {
         let W = img.width, H = img.height
-        guard !marks.isEmpty, let c = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
+        guard !marks.isEmpty || !glosses.isEmpty, let c = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
                                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return img }
         let h = CGFloat(H)
@@ -97,6 +107,8 @@ enum ShotRender {
             guard let tiny = small.makeImage() else { continue }
             c.saveGState(); c.interpolationQuality = .none; c.draw(tiny, in: bl(r)); c.restoreGState()
         }
+        // 译文盖在原文那一行上，标注再画在译文上面
+        for g in glosses { drawGloss(g, in: c, imageWidth: CGFloat(W), flip: bl) }
         for m in marks where m.tool != .mosaic {
             c.saveGState(); defer { c.restoreGState() }
             c.setStrokeColor(m.color.cgColor); c.setFillColor(m.color.cgColor)
@@ -144,6 +156,51 @@ enum ShotRender {
         return c.makeImage() ?? img
     }
 
+    /// 一行译文：用原文那行的底色盖住原文，字号按行高，放不下先往右多占一点，再缩字
+    static func drawGloss(_ g: ShotGloss, in c: CGContext, imageWidth: CGFloat, flip: (CGRect) -> CGRect) {
+        let h = g.rect.height
+        let pad = max(2, h * 0.12)
+        var size = h * 0.86
+        func attrs(_ s: CGFloat) -> [NSAttributedString.Key: Any] { [.font: NSFont.systemFont(ofSize: s, weight: .medium), .foregroundColor: g.fg] }
+        let maxW = min(imageWidth - g.rect.minX, max(g.rect.width * 1.35, g.rect.width + h * 2))
+        var w = (g.text as NSString).size(withAttributes: attrs(size)).width
+        while w + pad * 2 > maxW, size > h * 0.42 { size *= 0.92; w = (g.text as NSString).size(withAttributes: attrs(size)).width }
+        let box = CGRect(x: g.rect.minX - pad, y: g.rect.minY - pad * 0.6, width: max(g.rect.width, min(maxW, w)) + pad * 2, height: h + pad * 1.2)
+        let r = flip(box)
+        c.saveGState(); defer { c.restoreGState() }
+        c.setFillColor(g.bg.cgColor)
+        c.addPath(CGPath(roundedRect: r, cornerWidth: pad, cornerHeight: pad, transform: nil)); c.fillPath()
+        let a = attrs(size)
+        let th = (g.text as NSString).size(withAttributes: a).height
+        (g.text as NSString).draw(with: CGRect(x: r.minX + pad, y: r.midY - th / 2, width: r.width - pad * 2, height: th),
+                                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: a)
+    }
+
+    /// 一行字所在位置的底色：取这块里亮度居中的像素（字只占一小部分），字色按底色深浅选黑或白
+    static func colors(of img: CGImage, at r: CGRect) -> (bg: NSColor, fg: NSColor) {
+        let fallback = (NSColor.white, NSColor.black)
+        let box = r.insetBy(dx: -2, dy: -2).integral.intersection(CGRect(x: 0, y: 0, width: img.width, height: img.height))
+        guard box.width >= 2, box.height >= 2, let part = img.cropping(to: box) else { return fallback }
+        let sw = 48, sh = 8
+        var px = [UInt8](repeating: 0, count: sw * sh * 4)
+        guard let ctx = CGContext(data: &px, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return fallback }
+        ctx.interpolationQuality = .none
+        ctx.draw(part, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+        var all: [(l: Double, r: Double, g: Double, b: Double)] = []
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let r = Double(px[i]) / 255, g = Double(px[i + 1]) / 255, b = Double(px[i + 2]) / 255
+            all.append((0.299 * r + 0.587 * g + 0.114 * b, r, g, b))
+        }
+        all.sort { $0.l < $1.l }
+        // 底色多半是占多数的那一端：看中位数偏亮还是偏暗，取那一端四分之一处
+        let mid = all[all.count / 2]
+        let pick = mid.l > 0.5 ? all[all.count * 3 / 4] : all[all.count / 4]
+        let bg = NSColor(srgbRed: pick.r, green: pick.g, blue: pick.b, alpha: 1)
+        let fg = pick.l > 0.55 ? NSColor(white: 0.08, alpha: 1) : NSColor(white: 0.97, alpha: 1)
+        return (bg, fg)
+    }
+
     /// 文字带一圈描边，放在什么底色上都看得清
     static func textAttrs(_ m: ShotMark) -> [NSAttributedString.Key: Any] {
         let light = (m.color.usingColorSpace(.sRGB)?.brightnessComponent ?? 0) > 0.7
@@ -170,7 +227,7 @@ final class ShotCanvas: NSView, NSTextFieldDelegate {
     init(frame: CGRect, doc: ShotDoc) {
         self.doc = doc
         super.init(frame: frame)
-        bag = doc.$marks.sink { [weak self] _ in self?.cache = nil; DispatchQueue.main.async { self?.needsDisplay = true } }
+        bag = doc.$marks.combineLatest(doc.$glosses).sink { [weak self] _ in self?.cache = nil; DispatchQueue.main.async { self?.needsDisplay = true } }
     }
     required init?(coder: NSCoder) { fatalError() }
 

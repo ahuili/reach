@@ -129,7 +129,7 @@ final class ClipboardMonitor {
 
     func ingest(_ item: inout Item) {
         let now = Date()
-        // 和留存里某条一模一样：不重复记，只当作用了一次
+        // 和抽屉里某条一模一样：不重复记，只当作用了一次
         if let k = store.find(hash: item.hash, kind: .kept) { lastCapturedId = k.id; return }
         if var old = store.find(hash: item.hash, kind: .clip) {
             if let f = item.imageFile { try? FileManager.default.removeItem(at: ReachPaths.images.appendingPathComponent(f)) }
@@ -195,7 +195,7 @@ final class Paster {
                                          : PasteOption(label: "整条", detail: "↩", icon: "doc.plaintext", mode: .smart))
         }
         for f in fs {
-            out.append(PasteOption(label: "只贴\(f.label)", icon: Self.fieldIcon(f.kind), detail: f.kind == .secret && !model.isRevealed(it) ? SecretDetector.maskValue(f.value) : Text.truncate(f.value, 44),
+            out.append(PasteOption(label: "只贴\(f.displayLabel)", icon: Self.fieldIcon(f.kind), detail: f.kind == .secret && !model.isRevealed(it) ? SecretDetector.maskHint(f.value) : Text.truncate(f.value, 44),
                                    mode: .value(f.value, secret: f.kind == .secret)))
         }
         if fs.contains(where: { $0.kind == .account }) && fs.contains(where: { $0.kind == .secret }) {
@@ -345,13 +345,25 @@ final class Paster {
             model.toast("已复制，按 ⌘V 粘贴。想让它自动贴：系统设置 › 隐私与安全性 › 辅助功能 里允许「手边」")
             if !warnedTrust { warnedTrust = true; Keys.promptTrust() }
         }
-        if secret {
-            // 密钥在剪贴板里只留 30 秒
-            let count = NSPasteboard.general.changeCount
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-                if NSPasteboard.general.changeCount == count { NSPasteboard.general.clearContents(); self?.monitor?.syncCount() }
-            }
+        if secret { clearSecretLater() }
+    }
+
+    /// 密钥在剪贴板里只留 30 秒
+    private func clearSecretLater() {
+        let count = NSPasteboard.general.changeCount
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if NSPasteboard.general.changeCount == count { NSPasteboard.general.clearContents(); self?.monitor?.syncCount() }
         }
+    }
+
+    /// 只复制，不贴：给"怎么贴"里的 ⌘C 用。侧栏留着，可以接着复制下一项
+    func copyOnly(_ it: Item, mode: PasteMode, label: String) {
+        guard let p = payload(it, mode: mode, target: .other), !p.plain.isEmpty || p.html != nil || p.image != nil || !p.files.isEmpty else { model.toast("这一项只能贴，不能单独复制"); return }
+        Pasteboard.write(p)
+        monitor?.syncCount()
+        store.recordUse(it.id, app: nil)
+        if p.containsSecret { clearSecretLater() }
+        model.toast(p.containsSecret ? "已复制\(label.replacingOccurrences(of: "只贴", with: ""))，30 秒后从剪贴板清除" : "已复制")
     }
 
     /// 账号 → Tab → 密码，一次填完

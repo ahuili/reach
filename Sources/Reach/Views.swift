@@ -100,7 +100,7 @@ struct SidebarView: View {
     @FocusState private var searchFocused: Bool
 
     private var pageKey: Int {
-        model.editor != nil ? 1 : model.options != nil ? 2 : model.template != nil ? 3 : model.managingFolders ? 4 : 0
+        model.editor != nil ? 1 : model.saving != nil ? 5 : model.options != nil ? 2 : model.template != nil ? 3 : model.managingFolders ? 4 : 0
     }
 
     var body: some View {
@@ -118,6 +118,7 @@ struct SidebarView: View {
                 case 2: OptionsPage()
                 case 3: TemplatePage()
                 case 4: FolderManagerPage()
+                case 5: SavePage()
                 default: EmptyView()
                 }
             }
@@ -211,14 +212,14 @@ struct Banner<Trailing: View>: View {
     }
 }
 
-/// 最近复制 / 留存：一条滑块式分段
+/// 最近复制 / 抽屉：一条滑块式分段
 struct SegmentedTabs: View {
     @EnvironmentObject var model: AppModel
     @Namespace private var ns
     var body: some View {
         HStack(spacing: 0) {
             seg(.recent, "最近复制", model.store.clips.count)
-            seg(.kept, "留存", model.store.kept.count)
+            seg(.kept, "抽屉", model.store.kept.count)
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.fill))
@@ -247,7 +248,7 @@ struct SegmentedTabs: View {
     }
 }
 
-/// 留存页顶上一排文件夹：点一下筛选，右键改名删除，卡片可以拖上来
+/// 抽屉页顶上一排文件夹：点一下筛选，右键改名删除，卡片可以拖上来
 struct FolderChips: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
@@ -281,7 +282,7 @@ struct FolderChips: View {
         .contextMenu {
             if let id = c.id, !id.hasPrefix("@") {
                 Button("改名、排序、删除…") { model.managingFolders = true }
-                Button("删除「\(c.name)」（里面的留存移到未归类）") { model.deleteFolder(id) }
+                Button("删除「\(c.name)」（里面的内容移到未归类）") { model.deleteFolder(id) }
             }
             Button("新建文件夹…") { model.managingFolders = true }
         }
@@ -305,7 +306,6 @@ struct RowView: View {
         case .day(let t):
             SectionLabel(title: t)
         case .approval(let a): ApprovalCard(approval: a).padding(.vertical, 4)
-        case .agent(let s): AgentCard(session: s).padding(.vertical, 2)
         case .group(let id, let title, let subtitle, let count, let expanded):
             Button { model.toggleGroup(id, expanded: expanded) } label: {
                 HStack(spacing: 10) {
@@ -411,7 +411,7 @@ struct ItemRow: View {
         let fs = model.fields(item)
         var s = "↩ 贴  → 只贴一部分"
         if fs.contains(where: { $0.kind == .account }) && fs.contains(where: { $0.kind == .secret }) { s += "  ⌥↩ 填登录" }
-        if item.kind == .clip { s += "  ⌘S 留存" } else { s += "  ⌘E 编辑" }
+        if item.kind == .clip { s += "  ⌘S 放进抽屉" } else { s += "  ⌘E 编辑" }
         return s
     }
 
@@ -493,17 +493,13 @@ struct ItemRow: View {
     @ViewBuilder private var menu: some View {
         Button("贴") { model.selection = item.id; model.activate(item) }
         Button("只贴一部分…") { model.selection = item.id; model.openOptions() }
-        if item.kind == .clip { Button("留存") { model.keep(item) } }
+        if inBasket && model.basket.count > 1 { Button("把选中的 \(model.basket.count) 条放进抽屉…") { model.startSave(item) } }
+        else if item.kind == .clip { Button("放进抽屉…") { model.startSave(item) } }
         Button("编辑") { model.edit(item) }
         Button(model.basket.contains(item.id) ? "取消选择" : "选中") { model.toggleBasket(item) }
         if !model.store.folders.isEmpty {
             Menu("移到") {
                 ForEach(model.store.folders.sorted { $0.order < $1.order }) { f in Button(f.name) { model.move(item, toFolder: f.id) } }
-            }
-        }
-        if model.settings.agentRail, !model.agents.isEmpty {
-            Menu("发给 Agent") {
-                ForEach(model.agents) { s in Button("\(s.agent.name) · \(s.project)") { model.rail.send(items: [item.id], to: s) } }
             }
         }
         if isSecret {
@@ -555,9 +551,10 @@ struct FooterView: View {
                     Circle().fill(Palette.brand)
                     Text("\(model.basket.count)").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Palette.brandInk).monospacedDigit()
                 }.frame(width: 20, height: 20)
-                Text("已选 \(model.basket.count) 条").font(.system(size: 12, weight: .medium))
+                Text("已选").font(.system(size: 12, weight: .medium))
                 Spacer(minLength: 0)
                 QuietButton(title: "清空") { model.basket = [] }
+                QuietButton(title: "放进抽屉") { model.startSave(nil) }.help("⌘S：合成一条，或加到抽屉里已有的一条后面")
                 PrimaryButton(title: "合成一段贴", shortcut: "⌘↩") { model.paster.pasteBasket() }
             } else {
                 Text("↩ 贴   → 只贴一部分   空格 多选   Tab 切换").font(.system(size: 10.5)).foregroundStyle(.tertiary).lineLimit(1)
@@ -566,7 +563,7 @@ struct FooterView: View {
                 Button { model.hidePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { model.shot.start() } } label: { Image(systemName: "viewfinder").font(.system(size: 13)) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("截图（\(model.settings.shotKey.label)）")
                 Button { model.newNote() } label: { Image(systemName: "square.and.pencil").font(.system(size: 13)) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("新建留存（⌘N）")
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("新建一条（⌘N）")
                 Button { (NSApp.delegate as? AppDelegate)?.openSettings() } label: { Image(systemName: "gearshape").font(.system(size: 13)) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("设置（⌘,）")
             }
@@ -646,67 +643,3 @@ struct EnvRow: View {
     }
 }
 
-struct AgentCard: View {
-    @EnvironmentObject var model: AppModel
-    let session: AgentSession
-    @State private var reply = ""
-    @State private var targeted = false
-    @FocusState private var replyFocused: Bool
-
-    private var dot: Color {
-        switch session.state {
-        case .running: return .blue
-        case .waiting: return Palette.warn
-        case .maybeWaiting: return Palette.brand
-        case .done: return .green
-        case .idle: return .gray
-        }
-    }
-
-    private var status: String {
-        switch session.state {
-        case .running: return "在干活"
-        case .waiting: return "等你"
-        case .maybeWaiting: return "可能在等你"
-        case .done: return "完成"
-        case .idle: return "停着"
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Circle().fill(dot).frame(width: 7, height: 7)
-                Text("\(session.agent.name) · \(session.project.isEmpty ? "未知项目" : session.project)").font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Spacer(minLength: 0)
-                TagView(text: status, color: dot)
-                Button { model.dismissedAgents.insert(model.agentKey(session)); model.rebuild() } label: { Image(systemName: "xmark").font(.system(size: 9)) }
-                    .buttonStyle(.plain).foregroundStyle(.tertiary).help("先收起，有新动静再出来")
-            }
-            if !session.title.isEmpty { Text(session.title).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1) }
-            let body = session.state == .done ? Markdown.toPlain(session.lastMessage) : session.detail
-            if !body.isEmpty {
-                Text(body).font(.system(size: 11.5)).foregroundStyle(session.state == .done ? .primary : .secondary)
-                    .lineLimit(session.state == .done ? 4 : 2).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack(spacing: 6) {
-                TextField(targeted ? "松手发给它" : "回一句…", text: $reply)
-                    .textFieldStyle(.plain).font(.system(size: 12)).focused($replyFocused)
-                    .onSubmit { let t = reply; reply = ""; replyFocused = false; model.replyingTo = nil; if !t.isEmpty { model.rail.send(text: t, to: session) } }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    .background(Capsule().fill(Palette.fill))
-                if session.state == .done, !session.lastMessage.isEmpty {
-                    QuietButton(title: "复制结论") { Pasteboard.write(Payload(plain: session.lastMessage)); model.paster.monitor?.syncCount(); model.toast("已复制") }
-                }
-                QuietButton(title: "去窗口") { model.rail.jump(to: session) }
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.fill))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(session.state == .waiting ? Palette.warn : (targeted ? Palette.brand : .clear), lineWidth: 1.5))
-        .onChange(of: replyFocused) { f in model.replyingTo = f ? session.id : (model.replyingTo == session.id ? nil : model.replyingTo) }
-        .onDrop(of: ["public.plain-text"], isTargeted: $targeted) { providers in
-            loadDrop(providers) { id in model.rail.send(items: [id], to: session) }
-        }
-    }
-}

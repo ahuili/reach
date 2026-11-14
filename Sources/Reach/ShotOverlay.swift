@@ -10,21 +10,24 @@ final class ShotController {
     let model: AppModel
     let monitor: ClipboardMonitor
     var testMode = false
-    private var store: Store { model.store }
+    var store: Store { model.store }
 
     private var panels: [ShotPanel] = []
     private var frozen: [FrozenScreen] = []
     private var windows: [ShotWindow] = []
     private var prevApp: NSRunningApplication?
-    private var session: ShotSession?
-    private var doc: ShotDoc?
-    private var canvas: ShotCanvas?
+    var session: ShotSession?
+    var doc: ShotDoc?
+    var canvas: ShotCanvas?
     private var bar: NSHostingView<ShotBar>?
-    private var editingView: ShotView?
-    private var source: (name: String, bundle: String?)?
+    /// 「看懂」卡片，放在选区旁边
+    var card: NSHostingView<ShotExplainCard>?
+    var editingView: ShotView?
+    var source: (name: String, bundle: String?)?
     private var annotateOnly = false
     private var pins: [PinWindow] = []
     private var barWatch: AnyCancellable?
+    var cardWatch: AnyCancellable?
     private var busy = false
 
     init(model: AppModel, monitor: ClipboardMonitor) { self.model = model; self.monitor = monitor }
@@ -139,7 +142,10 @@ final class ShotController {
 
     func debugState() -> [String: Any] {
         ["open": isOpen, "editing": doc != nil, "auto": doc?.autoCount ?? 0, "marks": doc?.marks.count ?? 0,
-         "findings": (session?.findings ?? []).map(\.label), "lines": session?.lines ?? [], "reading": session?.reading ?? false]
+         "findings": (session?.findings ?? []).map(\.label), "lines": session?.lines ?? [], "reading": session?.reading ?? false,
+         "trans": "\(session?.trans ?? .off)", "glosses": (doc?.glosses ?? []).map(\.text), "notice": session?.notice ?? "",
+         "answer": session?.explain?.turns.last?.answer ?? "", "explainError": session?.explain?.error ?? "", "explainBusy": session?.explain?.busy ?? false,
+         "sentImage": session?.explain?.sentImage ?? false]
     }
 
     func debugReselect(_ r: CGRect) {
@@ -203,6 +209,7 @@ final class ShotController {
         canvas?.cancelText()
         for p in panels { p.orderOut(nil); p.close() }
         panels = []; frozen = []; windows = []
+        card?.removeFromSuperview(); card = nil; cardWatch = nil
         doc = nil; canvas = nil; bar = nil; session = nil; editingView = nil; barWatch = nil
         if reactivate, !testMode { prevApp?.activate() }
     }
@@ -243,7 +250,7 @@ final class ShotController {
         c.onChange = { [weak s, weak d] in s?.canUndo = d?.canUndo ?? false }
         v.addSubview(c)
         doc = d; canvas = c; session = s
-        barWatch = s.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.placeBar() } }
+        barWatch = s.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.placeBar(); self?.placeCard() } }
         let h = NSHostingView(rootView: ShotBar(s: s, act: { [weak self] a in self?.act(a) }))
         v.addSubview(h)
         bar = h
@@ -259,6 +266,8 @@ final class ShotController {
                 guard let self, self.doc === d else { return }
                 s.reading = false
                 s.lines = reading.lines
+                s.lineBoxes = reading.lineBoxes
+                s.lineSecret = reading.lineSecret
                 s.boxes = reading.secretBoxes
                 s.findings = found
                 if s.redactOn, !reading.secretBoxes.isEmpty { d.setAuto(reading.secretBoxes, on: true, pixel: c.k) }
@@ -271,7 +280,7 @@ final class ShotController {
     }
 
     /// 工具栏放在选区下面；下面放不下放上面；都放不下放在选区里面靠下
-    private func placeBar() {
+    func placeBar() {
         guard let h = bar, let v = editingView else { return }
         let sz = h.fittingSize
         let sel = v.selection ?? .zero
@@ -291,8 +300,8 @@ final class ShotController {
         guard let f = v.frozen else { return }
         let manual = (doc?.marks ?? []).filter { !$0.auto }
         let dx = (old.minX - rect.minX) * f.scale, dy = (old.minY - rect.minY) * f.scale
-        canvas?.cancelText(); canvas?.removeFromSuperview(); bar?.removeFromSuperview()
-        canvas = nil; bar = nil; doc = nil; session = nil
+        canvas?.cancelText(); canvas?.removeFromSuperview(); bar?.removeFromSuperview(); card?.removeFromSuperview()
+        canvas = nil; bar = nil; card = nil; doc = nil; session = nil
         beginEditing(v, rect: rect)
         for var m in manual {
             m.rect = m.rect.offsetBy(dx: dx, dy: dy)
@@ -309,8 +318,8 @@ final class ShotController {
     func backToSelecting() {
         guard !annotateOnly else { close(); return }
         canvas?.cancelText()
-        canvas?.removeFromSuperview(); bar?.removeFromSuperview()
-        canvas = nil; bar = nil; doc = nil; session = nil
+        canvas?.removeFromSuperview(); bar?.removeFromSuperview(); card?.removeFromSuperview()
+        canvas = nil; bar = nil; card = nil; doc = nil; session = nil
         for p in panels { p.view.dimOthers = false; p.view.selection = nil; p.view.phase = .selecting; p.view.needsDisplay = true }
         editingView?.window?.makeFirstResponder(editingView)
         if let v = editingView { v.window?.invalidateCursorRects(for: v) }
@@ -322,7 +331,10 @@ final class ShotController {
     /// 返回 true 表示处理了
     func key(_ e: NSEvent, in v: ShotView) -> Bool {
         let cmd = e.modifierFlags.contains(.command), shift = e.modifierFlags.contains(.shift)
-        if e.keyCode == 53 { if v.phase == .editing { backToSelecting() } else { close() }; return true }
+        if e.keyCode == 53 {
+            if session?.explain != nil { act(.explain) } else if v.phase == .editing { backToSelecting() } else { close() }
+            return true
+        }
         if v.phase == .selecting, e.keyCode == 36 || e.keyCode == 76 { beginEditing(v, rect: v.bounds); return true }
         guard v.phase == .editing, let s = session else { return false }
         switch e.keyCode {
@@ -338,13 +350,16 @@ final class ShotController {
             default: return false
             }
         }
+        if ch == "y" { act(.translate); return true }
+        if ch == "k" { act(.explain); return true }
         if let t = ShotTool.allCases.first(where: { $0.key.lowercased() == ch }) { act(.tool(t)); return true }
         return false
     }
 
     // MARK: 动作
 
-    enum Action { case tool(ShotTool), color(Int), undo, redo, clear, toggleRedact, copy, paste, basket, pin, cancel, take(ShotText.Finding) }
+    enum Action { case tool(ShotTool), color(Int), undo, redo, clear, toggleRedact, copy, paste, basket, pin, cancel, take(ShotText.Finding),
+                  translate, explain, ask(String), copyAnswer, keepAnswer }
 
     func act(_ a: Action) {
         guard let s = session, let d = doc, let c = canvas else { return }
@@ -366,6 +381,11 @@ final class ShotController {
             close()
             model.toast("已复制图里的\(f.label == "全部文字" ? "文字" : f.label)")
         case .copy, .paste, .basket, .pin: finish(a)
+        case .translate: toggleTranslate()
+        case .explain: toggleExplain()
+        case .ask(let q): ask(q)
+        case .copyAnswer: copyAnswer()
+        case .keepAnswer: keepAnswer()
         }
     }
 
@@ -444,6 +464,16 @@ final class ShotController {
 final class ShotPanel: NSPanel {
     var view: ShotView!
     override var canBecomeKey: Bool { true }
+
+    /// 手边没有菜单栏，⌘V 这些到不了输入框：在「接着问」里打字时自己转过去
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        let f = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if f.contains(.command), !f.contains(.option), firstResponder is NSTextView,
+           let sel = PanelController.editAction((e.charactersIgnoringModifiers ?? "").lowercased(), shift: f.contains(.shift)) {
+            NSApp.sendAction(sel, to: nil, from: nil); return true
+        }
+        return super.performKeyEquivalent(with: e)
+    }
 }
 
 final class ShotView: NSView {
@@ -633,7 +663,18 @@ final class ShotSession: ObservableObject {
     /// 鼠标停在哪个按钮上，就在下面一行说它是干什么的（系统的悬停提示会被遮罩盖住，只能自己画）
     @Published var hint: String?
     var lines: [String] = []
+    var lineBoxes: [CGRect] = []
+    var lineSecret: [Bool] = []
     var boxes: [CGRect] = []
+    /// 原位翻译
+    enum Trans: Equatable { case off, loading, on }
+    @Published var trans: Trans = .off
+    /// 上一次的译文（关掉再打开不用重新问）
+    var glossCache: [ShotGloss]?
+    /// 「看懂」卡片的内容
+    @Published var explain: ShotExplain?
+    /// 第二行临时显示的一句话（比如还没配 AI）
+    @Published var notice: String?
     var annotateOnly = false
     var target = ""
     var basket = 0
@@ -663,6 +704,9 @@ struct ShotBar: View {
                 }
                 sep
                 icon("arrow.uturn.backward", on: false, help: "撤销  ⌘Z") { act(.undo) }.opacity(s.canUndo ? 1 : 0.35)
+                sep
+                icon("translate", on: s.trans != .off, help: s.trans == .loading ? "翻译中…" : "原位翻译：译文直接盖在原文上，复制出去的图也是译好的。外文译成中文，中文译成英文  Y") { act(.translate) }
+                icon("sparkles", on: s.explain != nil, help: "看懂：说清图里是什么——外文给译文和难词，报错给原因和下一步，图表给结论，还能接着问  K") { act(.explain) }
                 sep
                 icon("pin", on: false, help: "钉在屏幕上：截图浮在最上层，对着看。滚轮缩放，双击关掉") { act(.pin) }
                 if !s.annotateOnly {
@@ -695,7 +739,14 @@ struct ShotBar: View {
             HStack(spacing: 6) {
                 if let h = s.hint {
                     Text(h).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.9)).padding(.horizontal, 6).frame(height: 24)
+                } else if let n = s.notice {
+                    Image(systemName: "info.circle").font(.system(size: 11)).foregroundStyle(amber)
+                    Text(n).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.85)).padding(.trailing, 6).frame(height: 24)
                 } else {
+                    if s.trans == .loading {
+                        ProgressView().controlSize(.mini).colorScheme(.dark)
+                        Text("翻译中…").font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6))
+                    }
                     if s.reading {
                         ProgressView().controlSize(.mini).colorScheme(.dark)
                         Text(s.pending == nil ? "认字中…" : "认完字、遮好密钥就好…").font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6))
@@ -708,7 +759,7 @@ struct ShotBar: View {
                         chip(f.icon, f.label == "全部文字" ? "复制全部文字" : "复制\(f.label)", strong: false, help: Self.preview(f.value)) { act(.take(f)) }
                     }
                     if !s.reading, s.secrets == 0, s.findings.isEmpty {
-                        Text(s.annotateOnly ? "↩ 复制   ⌘↩ 贴回   ⌘Z 撤销   Esc 关掉" : "↩ 复制   ⌘↩ 贴回   空格 放进篮子   拖边角改选区   Esc 重新框选")
+                        Text(s.annotateOnly ? "↩ 复制   ⌘↩ 贴回   Y 翻译   K 看懂   Esc 关掉" : "↩ 复制   ⌘↩ 贴回   Y 翻译   K 看懂   空格 放进篮子   Esc 重新框选")
                             .font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).padding(.horizontal, 6).frame(height: 24)
                     }
                 }

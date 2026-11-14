@@ -13,7 +13,7 @@ public final class Store {
     public var settings = Settings() { didSet { if settings != oldValue { setKV("settings", settings) } } }
     /// 分组的名字（groupId → 名字）
     public private(set) var groupNames: [String: String] = [:]
-    /// 项目里某个配置名固定用哪条留存（project → name → itemId）
+    /// 项目里某个配置名固定用抽屉里哪条（project → name → itemId）
     public private(set) var bindings: [String: [String: String]] = [:]
 
     public init(vault: Vault) throws {

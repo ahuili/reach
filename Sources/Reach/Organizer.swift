@@ -3,7 +3,7 @@ import Vision
 import NaturalLanguage
 import ReachCore
 
-/// 自动整理：截图认字、给一组复制起名、留存时自动归文件夹、按意思搜。原则是自动做、可撤销、不发问。
+/// 自动整理：截图认字、给一组复制起名、放进抽屉时自动归文件夹、按意思搜。原则是自动做、可撤销、不发问。
 final class Organizer {
     let model: AppModel
     var store: Store { model.store }
@@ -68,7 +68,7 @@ final class Organizer {
         }
     }
 
-    // MARK: 留存时自动归文件夹
+    // MARK: 放进抽屉时自动归文件夹
 
     func autoFile(_ id: String) {
         guard store.settings.ai.isReady, let it = store.items[id], it.folderId == nil, !store.folders.isEmpty else { return }

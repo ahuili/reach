@@ -1,6 +1,6 @@
 import Foundation
 
-/// clip 复制历史，kept 留存，visit 从别的 App 点开、经过链接分流的链接（只进搜索，30 天后清掉）
+/// clip 复制历史，kept 抽屉，visit 从别的 App 点开、经过链接分流的链接（只进搜索，30 天后清掉）
 public enum ItemKind: String, Codable { case clip, kept, visit }
 
 public enum ContentType: String, Codable, CaseIterable {
@@ -28,7 +28,7 @@ public enum ContentType: String, Codable, CaseIterable {
 
 public enum Origin: String, Codable { case copied, agent, imported, manual }
 
-/// 侧栏里的一张卡片。复制历史（clip）和留存（kept）是同一种东西，区别只在会不会过期。
+/// 侧栏里的一张卡片。复制历史（clip）和抽屉（kept）是同一种东西，区别只在会不会过期。
 public struct Item: Codable, Identifiable, Equatable {
     public var id: String
     public var kind: ItemKind
@@ -102,8 +102,20 @@ public struct AISettings: Codable, Equatable {
     public var model: String = ""
     public var apiKey: String = ""
     public var enabled: Bool = false
+    /// 模型能看图：截图「看懂」时把（打过码的）图也发过去
+    public var vision: Bool = false
     public init() {}
     public var isReady: Bool { enabled && !baseURL.isEmpty && !model.isEmpty }
+
+    enum CodingKeys: String, CodingKey { case baseURL, model, apiKey, enabled, vision }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+        apiKey = try c.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        vision = try c.decodeIfPresent(Bool.self, forKey: .vision) ?? false
+    }
 }
 
 /// 一组快捷键：Carbon 键码 + 修饰键（cmdKey 256、shiftKey 512、optionKey 2048、controlKey 4096），label 是显示用的「⇧⌘V」
@@ -122,8 +134,6 @@ public struct Settings: Codable, Equatable {
     public var paused = false
     /// 普通 ⌘V 时也按目标窗口调整格式
     public var ambientFormat = false
-    /// 在侧栏里批准 Claude Code 的工具调用（会让终端里的确认框晚出现）
-    public var sidebarApprove = false
     public var retentionDays = 30
     public var secretClipMinutes = 60
     public var hotEdge = true
@@ -134,8 +144,6 @@ public struct Settings: Codable, Equatable {
     public var handleY = 0.5
     /// 开机自动打开
     public var launchAtLogin = true
-    /// Agent 进展栏（试验中，默认关）
-    public var agentRail = false
     /// 打开侧栏的快捷键（设置里可以录新的）
     public var panelKey = KeyCombo.defaultPanel
     /// 截图快捷键开关和按键
@@ -152,7 +160,6 @@ public struct Settings: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
         ambientFormat = try c.decodeIfPresent(Bool.self, forKey: .ambientFormat) ?? false
-        sidebarApprove = try c.decodeIfPresent(Bool.self, forKey: .sidebarApprove) ?? false
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
         secretClipMinutes = try c.decodeIfPresent(Int.self, forKey: .secretClipMinutes) ?? 60
         hotEdge = try c.decodeIfPresent(Bool.self, forKey: .hotEdge) ?? true
@@ -160,7 +167,6 @@ public struct Settings: Codable, Equatable {
         edgeHandle = try c.decodeIfPresent(Bool.self, forKey: .edgeHandle) ?? true
         handleY = try c.decodeIfPresent(Double.self, forKey: .handleY) ?? 0.5
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
-        agentRail = try c.decodeIfPresent(Bool.self, forKey: .agentRail) ?? false
         shotHotkey = try c.decodeIfPresent(Bool.self, forKey: .shotHotkey) ?? true
         panelKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .panelKey)) ?? KeyCombo.defaultPanel
         shotKey = (try? c.decodeIfPresent(KeyCombo.self, forKey: .shotKey)) ?? KeyCombo.defaultShot

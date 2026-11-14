@@ -42,6 +42,19 @@ check(fields.first { $0.kind == .account }?.value == "admin@example.com", "拆�
 check(fields.filter { $0.kind == .secret }.count == 2, "拆出两个密钥字段")
 check(FieldParser.parse("ssh deploy@10.0.3.21 -p 2222").contains { $0.kind == .command }, "拆出命令")
 
+// 一条里好几个密钥：从上下文取名字分清
+let k1 = "sk-" + String(repeating: "Qw3rT7", count: 6), k2 = "sk-" + String(repeating: "Zx9cV2", count: 6), k3 = "sk-" + String(repeating: "Mn5bH8", count: 6)
+func secretNames(_ t: String) -> [String] { FieldParser.parse(t).filter { $0.kind == .secret }.map { $0.name ?? "-" } }
+check(secretNames("OpenAI: \(k1)\nDEEPSEEK_API_KEY=\(k2)\n- 公司 Claude 的 key \(k3)") == ["OpenAI", "DEEPSEEK", "公司 Claude"], "同一行前面的字当名字（实际 \(secretNames("OpenAI: \(k1)\nDEEPSEEK_API_KEY=\(k2)\n- 公司 Claude 的 key \(k3)"))）")
+check(secretNames("## 生产\n\(k1)\n\n## 测试\n\(k2)") == ["生产", "测试"], "只有密钥的行用上面的小标题")
+check(secretNames("后台 https://a.example.com\n账号 ops@example.com\n密码 Passw0rd!x\nkey: \(k1)") == ["ops@example.com", "-"], "密码用上面的账号当名字，网址行不用（实际 \(secretNames("后台 https://a.example.com\n账号 ops@example.com\n密码 Passw0rd!x\nkey: \(k1)"))）")
+check(secretNames("## 生产\nroot@10.0.3.21\n密码 Prod#2026x\n\n## 测试\nroot@10.0.3.40\n密码 Test#2026y") == ["生产", "测试"], "同一段里的小标题优先于主机行")
+check(secretNames("\(k1)\n\(k2)") == ["第1个", "第2个"], "实在没名字的按第几个分")
+check(secretNames("export MONKEY_TOKEN=\(k1)\nexport DONKEY_TOKEN=\(k2)") == ["MONKEY", "DONKEY"], "不会把 Monkey 里的 key 删掉")
+check(secretNames("AK \(k1) SK \(k2)") == ["AK", "SK"], "同一行两个密钥各取各的")
+check(FieldParser.parse("key: \(k1)").first { $0.kind == .secret }?.name == nil, "只有一个密钥不起名")
+check(SecretDetector.maskHint("Passw0rd!x") == "•••••• 10 位" && SecretDetector.maskHint(k1).hasSuffix(String(k1.suffix(4))), "短密码只说位数，长 Key 露头尾")
+
 // 分类
 check(Classifier.classify("https://example.com/a?b=1") == .link, "链接")
 check(Classifier.classify("git status") == .command, "命令")
@@ -140,45 +153,23 @@ do {
     failed += 1; print("✗ 存储测试出错：\(error)")
 }
 
-// Agent 会话解析
-func writeLines(_ name: String, _ objs: [[String: Any]]) -> URL {
-    let u = tmp.appendingPathComponent(name)
-    let s = objs.map { String(data: try! JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }.joined(separator: "\n") + "\n"
-    try! s.write(to: u, atomically: true, encoding: .utf8)
-    return u
-}
 let now = Date()
-let c1 = writeLines("c1.jsonl", [
-    ["type": "user", "cwd": "/Users/x/proj/weft", "message": ["role": "user", "content": "修一下登录页"]],
-    ["type": "assistant", "message": ["role": "assistant", "stop_reason": "tool_use", "content": [["type": "tool_use", "name": "Bash", "input": ["command": "npm test"]]]]],
-])
-let s1 = AgentScanner.parseClaude(c1, mtime: now, now: now)
-check(s1?.state == .running && s1?.detail == "Bash：npm test" && s1?.project == "weft" && s1?.title == "修一下登录页", "Claude 在跑：\(String(describing: s1))")
-check(AgentScanner.parseClaude(c1, mtime: now.addingTimeInterval(-60), now: now)?.state == .maybeWaiting, "卡了一分钟：可能在等你")
-let c2 = writeLines("c2.jsonl", [
-    ["type": "user", "cwd": "/p/site", "message": ["role": "user", "content": "发布"]],
-    ["type": "assistant", "message": ["role": "assistant", "stop_reason": "tool_use", "content": [["type": "tool_use", "name": "Bash", "input": ["command": "make"]]]]],
-    ["type": "user", "message": ["role": "user", "content": [["type": "tool_result", "content": "ok"]]]],
-    ["type": "assistant", "message": ["role": "assistant", "stop_reason": "end_turn", "content": [["type": "text", "text": "已发布到 https://a.example.com\n```bash\nmake rollback\n```"]]]],
-])
-let s2 = AgentScanner.parseClaude(c2, mtime: now, now: now)
-check(s2?.state == .done && s2?.lastMessage.contains("已发布") == true, "Claude 完成")
-let outs = AgentScanner.outputs(from: s2?.lastMessage ?? "")
-check(outs.count == 2 && outs[0].text == "make rollback" && outs[0].type == .command && outs[1].text == "https://a.example.com", "拆出产出：\(outs)")
-let x1 = writeLines("x1.jsonl", [
-    ["type": "session_meta", "payload": ["session_id": "abc", "cwd": "/p/api", "originator": "Codex Desktop"]],
-    ["type": "event_msg", "payload": ["type": "task_started"]],
-    ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": "跑迁移"]]]],
-    ["type": "response_item", "payload": ["type": "function_call", "name": "shell", "arguments": "{\"command\":\"make migrate\"}"]],
-])
-let sx = AgentScanner.parseCodex(x1, mtime: now, now: now)
-check(sx?.state == .running && sx?.detail == "shell：make migrate" && sx?.title == "跑迁移" && sx?.hostBundle == "com.openai.codex", "Codex 在跑：\(String(describing: sx))")
-let x2 = writeLines("x2.jsonl", [
-    ["type": "session_meta", "payload": ["session_id": "abd", "cwd": "/p/api"]],
-    ["type": "event_msg", "payload": ["type": "task_started"]],
-    ["type": "event_msg", "payload": ["type": "task_complete", "last_agent_message": "迁移完成"]],
-])
-check(AgentScanner.parseCodex(x2, mtime: now, now: now)?.lastMessage == "迁移完成", "Codex 完成")
+
+// 截图翻译、看懂
+check(ShotAI.translateTarget(["Settings", "Sign in to continue"]) == "简体中文" && ShotAI.translateTarget(["设置", "登录后继续"]) == "English", "翻译方向")
+check(ShotAI.worthTranslating("Sign in", to: "简体中文") && !ShotAI.worthTranslating("12:30", to: "简体中文") && !ShotAI.worthTranslating("登录", to: "简体中文"), "哪些行要翻")
+check(ShotAI.parseLines("```json\n[\"设置\", \"登录\"]\n```", count: 2) == ["设置", "登录"], "解析译文（带代码块记号）")
+check(ShotAI.parseLines("[\"设置\"]", count: 2) == nil, "行数对不上就不用")
+check(ShotAI.segments("原因是端口被占。\n```bash\nlsof -i :3000\n```\n然后重启。") == [.text("原因是端口被占。"), .code("lsof -i :3000"), .text("然后重启。")], "回答拆出代码块")
+check(!ShotAI.explainUser(lines: ["key: sk-proj-abcdefghijklmnopqrstuvwxyz123456"], app: "终端").contains("abcdefghijklmnop"), "发给模型前抹掉密钥")
+let mp = Magpie.parseModels(Data(#"{"data":[{"id":"zhipu/glm-5","magpie_label":"GLM-5 · Zhipu","modalities":{"input":["text"]}},{"id":"codex/gpt","display_name":"GPT","modalities":{"input":["text","image"]}}]}"#.utf8))
+check(mp.count == 2 && mp[0].label == "GLM-5 · Zhipu" && !mp[0].vision && mp[1].vision && mp[1].label == "GPT", "读 Magpie 模型列表：\(mp)")
+let mhome = tmp.appendingPathComponent("mhome")
+try? FileManager.default.createDirectory(at: mhome.appendingPathComponent(".config/magpie"), withIntermediateDirectories: true)
+try? #"{"addr":"127.0.0.1:4555"}"#.write(to: mhome.appendingPathComponent(".config/magpie/gateway.json"), atomically: true, encoding: .utf8)
+check(Magpie.baseURL(home: mhome) == "http://127.0.0.1:4555/v1" && Magpie.baseURL(home: tmp) == "http://127.0.0.1:3425/v1", "Magpie 地址")
+let oldAI = try! JSONDecoder().decode(AISettings.self, from: Data(#"{"baseURL":"x","model":"m","apiKey":"","enabled":true}"#.utf8))
+check(oldAI.isReady && !oldAI.vision, "旧版 AI 设置读得进来")
 
 // 目标窗口类别
 check(TargetKind.of(bundle: "com.tencent.xinWeChat") == .chat && TargetKind.of(bundle: "org.tabby") == .terminal

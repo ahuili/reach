@@ -57,8 +57,8 @@ final class Bridge {
             reply(["ok": true, "clips": store.clips.count, "kept": store.kept.count, "folders": store.folders.count,
                    "sensitive": store.items.values.filter { $0.sensitive }.count,
                    "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "shotkey": app?.shotHotkeyOK ?? false, "shotlabel": model.settings.shotKey.label, "panellabel": model.settings.panelKey.label, "screen": ShotGrab.allowed, "autopaste": Keys.trusted,
-                   "paused": store.settings.paused, "agents": model.agents.count,
-                   "claude": Connect.claudeConnected, "codex": Connect.codexConnected, "cli": Connect.cliInstalled, "login": LoginItem.enabled,
+                   "paused": store.settings.paused, 
+                   "cli": Connect.cliInstalled, "ai": store.settings.ai.isReady ? store.settings.ai.model : "", "login": LoginItem.enabled,
                    "links": store.settings.links.enabled, "linksPaused": store.settings.links.paused, "linksDefault": LinkRouter.isDefault, "linkRules": store.settings.links.rules.count])
         case "import.sidenotes":
             guard let app = NSApp.delegate as? AppDelegate else { reply(["error": "gone"]); return }
@@ -141,17 +141,40 @@ final class Bridge {
             if let b = req["folders"] as? Bool { model.managingFolders = b }
             if let n = req["selectIndex"] as? Int, model.selectable.indices.contains(n) { model.selection = model.selectable[n] }
             if req["activateSelected"] as? Bool == true, let it = model.selectedItem { model.activate(it) }
-            if let b = req["sidebarApprove"] as? Bool { model.settings.sidebarApprove = b }
             if let id = req["select"] as? String { model.selection = id }
             if let t = req["target"] as? String { model.targetBundle = t; model.targetName = req["targetName"] as? String ?? t; model.rebuild() }
             if req["options"] as? Bool == true { model.openOptions() } else if req["options"] as? Bool == false { model.options = nil }
             if req["edit"] as? Bool == true, let it = model.selectedItem { model.edit(it) } else if req["edit"] as? Bool == false { model.editor = nil }
             if let ids = req["basket"] as? [String] { model.basket = ids }
+            if testMode {
+                if let ai = req["ai"] as? [String: Any] {
+                    if let v = ai["baseURL"] as? String { model.settings.ai.baseURL = v }
+                    if let v = ai["model"] as? String { model.settings.ai.model = v }
+                    if let v = ai["vision"] as? Bool { model.settings.ai.vision = v }
+                    if let v = ai["enabled"] as? Bool { model.settings.ai.enabled = v }
+                }
+                if req["save"] as? Bool == true { model.startSave(model.selectedItem) } else if req["save"] as? Bool == false { model.saving = nil }
+                if let q = req["saveQuery"] as? String {
+                    model.saving?.query = q
+                    // 和打字一样：有字就选中第一条搜到的
+                    model.saving?.index = q.isEmpty ? 0 : (model.saveChoices.firstIndex { if case .append = $0 { return true }; return false } ?? 0)
+                }
+                if req["saveChoose"] as? Bool == true, let s = model.saving, model.saveChoices.indices.contains(s.index) { model.finishSave(model.saveChoices[s.index]) }
+                if let b = req["reveal"] as? Bool, let it = model.selectedItem {
+                    if b { model.revealed.insert(it.id) } else { model.revealed.remove(it.id) }
+                    if model.options != nil { model.openOptions() }
+                }
+            }
             if let id = req["activate"] as? String, let it = store.items[id] { model.paster.paste(it, mode: .smart) }
             if let n = req["approve"] as? Int, model.approvals.indices.contains(n) { model.resolve(model.approvals[n], allow: req["allow"] as? Bool ?? true) }
             app?.panelController.show(.approval)
+            if testMode, req["focus"] as? Bool == true { app?.panelController.panel.makeKey() }
             reply(["ok": true, "rows": model.rows.map(\.id).count, "approvals": model.approvals.map(\.title), "confirm": model.confirmSecret != nil,
-                   "options": (model.options ?? []).map { $0.label + " " + $0.detail }, "agents": model.agents.map { "\($0.agent.name)|\($0.project)|\($0.state.rawValue)|\($0.detail)" }])
+                   "options": (model.options ?? []).map { $0.label + " " + $0.detail },
+                   "saving": model.saveChoices.map { c -> String in
+                       switch c { case .new: return "new"; case .each: return "each"; case .append(let id): return "append:" + (store.items[id]?.displayTitle ?? "") }
+                   }, "saveIndex": model.saving?.index ?? -1, "key": app?.panelController.panel.isKeyWindow ?? false,
+                   "responder": app?.panelController.panel.firstResponder.map { String(describing: type(of: $0)) } ?? ""])
         case "debug.link":
             // 链接分流的测试入口：只在测试模式里能改设置、塞历史；判断结果只回去处，不开浏览器
             guard let links = app?.links else { reply(["error": "no links"]); return }
@@ -212,7 +235,9 @@ final class Bridge {
                 switch a {
                 case "copy": shot.act(.copy); case "basket": shot.act(.basket); case "pin": shot.act(.pin)
                 case "cancel": shot.act(.cancel); case "redact": shot.act(.toggleRedact); case "undo": shot.act(.undo)
-                default: break
+                case "translate": shot.act(.translate); case "explain": shot.act(.explain)
+                case "copyAnswer": shot.act(.copyAnswer); case "keepAnswer": shot.act(.keepAnswer)
+                default: if a.hasPrefix("ask:") { shot.act(.ask(String(a.dropFirst(4)))) }
                 }
             }
             if let p = req["snap"] as? String { _ = shot.snapshot(to: p) }
@@ -237,7 +262,7 @@ final class Bridge {
         guard !fileName.contains(".."), !fileName.hasPrefix("/") else { reply(["error": "只能写项目目录里的文件"]); return }
         let ms = EnvMatcher.match(names: names, items: Array(store.items.values), folders: store.folders, bindings: store.bindings[project] ?? [:])
         let usable = ms.filter { !$0.candidates.isEmpty }
-        guard !usable.isEmpty else { reply(["ok": true, "written": [], "missing": names, "note": "留存里没有找到这些配置"]); return }
+        guard !usable.isEmpty else { reply(["ok": true, "written": [], "missing": names, "note": "抽屉里没有找到这些配置"]); return }
         var choices: [String: String] = [:]
         for m in usable { if let b = m.best { choices[m.name] = b.itemId } }
         var warn: String?
@@ -272,7 +297,7 @@ final class Bridge {
         if item == nil, let q = req["q"] as? String {
             item = search(q, limit: 8).first { it in FieldParser.parse(it.text, loose: it.kind == .kept, ignoring: it.notSecret).contains { $0.kind == .secret } }
         }
-        guard let it = item else { reply(["error": "没找到对应的留存"]); return }
+        guard let it = item else { reply(["error": "抽屉里没找到对应的那条"]); return }
         let secrets = FieldParser.parse(it.text, loose: it.kind == .kept, ignoring: it.notSecret).filter { $0.kind == .secret }
         guard let sec = secrets.first else { reply(["error": "这条里没有密钥"]); return }
         let purpose = req["purpose"] as? String ?? "没有说明用途"
@@ -291,7 +316,7 @@ final class Bridge {
         guard let text = req["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { reply(["error": "内容是空的"]); return }
         let title = req["title"] as? String ?? ""
         let folder = req["folder"] as? String ?? ""
-        let a = Approval(kind: .save, agent: agent, title: "存一条到留存：\(title.isEmpty ? (Text.firstLine(text, max: 30) ?? "") : title)",
+        let a = Approval(kind: .save, agent: agent, title: "存一条到抽屉：\(title.isEmpty ? (Text.firstLine(text, max: 30) ?? "") : title)",
                          lines: [Text.truncate(SecretDetector.mask(text, loose: true), 200), folder.isEmpty ? "放到：未归类" : "放到：\(folder)"]) { [weak self] allow, _ in
             guard let self, allow else { reply(["error": "用户拒绝了"]); return }
             var it = Item(kind: .kept, text: text, sourceApp: agent, origin: .agent, hash: self.store.vault.fingerprint(Data(text.utf8)))
@@ -308,22 +333,6 @@ final class Bridge {
         present(a)
     }
 
-    private func hook(_ req: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
-        let payload = req["payload"] as? [String: Any] ?? [:]
-        let agent = req["agent"] as? String ?? "claude"
-        model.rail.handleHook(agent: agent, payload: payload, host: req["host"] as? String)
-        // 在侧栏里批准工具调用：默认关。开着时最多等 50 秒，没点就交回给 Agent 自己的确认框
-        if payload["hook_event_name"] as? String == "PermissionRequest", store.settings.sidebarApprove {
-            let tool = payload["tool_name"] as? String ?? "工具"
-            let cwd = payload["cwd"] as? String ?? ""
-            let a = Approval(kind: .tool, agent: "Claude Code", title: "要执行：\(tool)",
-                             lines: [AgentScanner.brief(tool: tool, input: payload["tool_input"] as? [String: Any]), "项目：\((cwd as NSString).lastPathComponent)"]) { allow, chosen in
-                // 你点了拒绝才真的拒绝；没点（超时）就交回给 Agent 自己的确认框
-                reply(["decision": allow ? "allow" : (chosen["@timeout"] != nil ? "none" : "deny")])
-            }
-            present(a)
-            return
-        }
-        reply(["ok": true])
-    }
+    /// 旧版装过的 Claude Code 钩子还会打过来：什么都不做，直接放行
+    private func hook(_ req: [String: Any], _ reply: @escaping ([String: Any]) -> Void) { reply(["ok": true]) }
 }

@@ -56,7 +56,7 @@ func printItems(_ r: [String: Any], withText: Bool = false) {
 }
 
 let usage = """
-手边 reach：查你留存的账号、密钥、连接信息，和最近复制的内容。
+手边 reach：查你抽屉里的账号、密钥、连接信息，和最近复制的内容。
 
   reach search <关键词>                      搜索（密钥打码）
   reach read <id>                            读一条全文（密钥位置是占位）
@@ -64,36 +64,25 @@ let usage = """
   reach env match NAME... [--project 目录]    这些配置名在手边里有没有对应的值
   reach env write NAME... [--project 目录] [--file .env]
                                               你批准后，把值直接写进项目的 .env
-  reach run --env 变量=留存关键词 ... -- 命令   你批准后，带着密钥运行一条命令
+  reach run --env 变量=抽屉关键词 ... -- 命令   你批准后，带着密钥运行一条命令
   reach secret <关键词> [--purpose 用途]       你批准后，输出密钥原文（会进对话，尽量用上面两种）
-  reach save --title 标题 [--folder 文件夹]    把标准输入的内容存进留存（要你批准）
-  reach import sidenotes                     把 SideNotes 的笔记搬进留存（原件不动，重复搬不会多出一份）
+  reach save --title 标题 [--folder 文件夹]    把标准输入的内容存进抽屉（要你批准）
+  reach import sidenotes                     把 SideNotes 的笔记搬进抽屉（原件不动，重复搬不会多出一份）
   reach status                               数量和各项开关的状态（不含内容）
   reach show                                 打开侧栏
   reach mcp                                  作为 MCP 服务运行（给 Agent 配置用）
 """
 
 func runHook() -> Never {
-    // Agent 的钩子：把事件转给手边。手边没开、超时都静默放行，绝不挡住 Agent。
-    let data = FileHandle.standardInput.readDataToEndOfFile()
-    guard let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { exit(0) }
-    let event = payload["hook_event_name"] as? String ?? ""
-    var req: [String: Any] = ["cmd": "hook", "agent": args.first ?? "claude", "payload": payload]
-    if let host = env["__CFBundleIdentifier"], !host.isEmpty { req["host"] = host }
-    let ans = IPC.request(req, timeout: event == "PermissionRequest" ? 55 : 2)
-    if event == "PermissionRequest", let d = ans?["decision"] as? String, d == "allow" || d == "deny" {
-        var decision: [String: Any] = ["behavior": d]
-        if d == "deny" { decision["message"] = "用户在手边里拒绝了这一步" }
-        let o: [String: Any] = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": decision]]
-        if let s = try? JSONSerialization.data(withJSONObject: o) { FileHandle.standardOutput.write(s) }
-    }
+    // 旧版装过的 Claude Code 钩子：Agent 进展已经去掉，读完输入直接放行，绝不挡住 Agent
+    _ = FileHandle.standardInput.readDataToEndOfFile()
     exit(0)
 }
 
 // MARK: MCP（stdio，JSON-RPC）
 
 let tools: [[String: Any]] = [
-    ["name": "search", "description": "搜索用户在手边里留存的账号、服务器、后台入口、API Key 等，以及最近复制的内容。密钥以打码形式返回。需要连接信息或凭据时先用它，不要向用户索要。",
+    ["name": "search", "description": "搜索用户放在手边抽屉里的账号、服务器、后台入口、API Key 等，以及最近复制的内容。密钥以打码形式返回。需要连接信息或凭据时先用它，不要向用户索要。",
      "inputSchema": ["type": "object", "properties": ["query": ["type": "string", "description": "关键词，空格分隔表示都要包含"], "limit": ["type": "integer"]], "required": ["query"]]],
     ["name": "read", "description": "按 id 读一条的全文。密钥位置是占位，不会给出原文。",
      "inputSchema": ["type": "object", "properties": ["id": ["type": "string"]], "required": ["id"]]],
@@ -104,7 +93,7 @@ let tools: [[String: Any]] = [
     ["name": "write_env", "description": "请用户批准后，由手边把这些环境变量的值直接写进项目的 .env 文件。值不经过对话。有多个候选时由用户在侧栏里选。",
      "inputSchema": ["type": "object", "properties": ["names": ["type": "array", "items": ["type": "string"]], "project": ["type": "string"], "file": ["type": "string", "description": "默认 .env"]], "required": ["names", "project"]]],
     ["name": "request_secret", "description": "请用户批准后取得一个密钥的原文。原文会进入对话，只有 write_env 和命令行 `reach run` 都不适用时才用。必须说明用途。",
-     "inputSchema": ["type": "object", "properties": ["query": ["type": "string", "description": "留存的关键词或 id"], "purpose": ["type": "string"]], "required": ["query", "purpose"]]],
+     "inputSchema": ["type": "object", "properties": ["query": ["type": "string", "description": "抽屉里那条的关键词或 id"], "purpose": ["type": "string"]], "required": ["query", "purpose"]]],
     ["name": "save_note", "description": "把新建的账号、Token、连接信息存回用户的手边（要用户批准）。",
      "inputSchema": ["type": "object", "properties": ["title": ["type": "string"], "text": ["type": "string"], "folder": ["type": "string"]], "required": ["title", "text"]]],
 ]
@@ -178,11 +167,11 @@ case "status":
     let r = call(["cmd": "status"])
     if r["error"] != nil { fail(r) }
     func yes(_ k: String) -> String { (r[k] as? Bool ?? false) ? "是" : "否" }
-    out("最近复制 \(r["clips"] ?? 0) 条，留存 \(r["kept"] ?? 0) 条（\(r["folders"] ?? 0) 个文件夹），其中含密钥 \(r["sensitive"] ?? 0) 条")
+    out("最近复制 \(r["clips"] ?? 0) 条，抽屉 \(r["kept"] ?? 0) 条（\(r["folders"] ?? 0) 个文件夹），其中含密钥 \(r["sensitive"] ?? 0) 条")
     out("打开侧栏 \((r["panellabel"] as? String) ?? "⇧⌘V") 注册成功：\(yes("hotkey"))；备用 ⌃⌥V：\(yes("hotkey2"))")
     out("截图快捷键 \((r["shotlabel"] as? String) ?? "⌃⌥A")：\(yes("shotkey"))；屏幕录制权限：\(yes("screen"))")
     out("自动粘贴（辅助功能权限）：\(yes("autopaste"))；暂停记录：\(yes("paused"))")
-    out("看到的 Agent 会话：\(r["agents"] ?? 0)；已连接 Claude Code：\(yes("claude"))，Codex：\(yes("codex"))，命令行已安装：\(yes("cli"))")
+    out("命令行已安装：\(yes("cli"))；AI 模型：\((r["ai"] as? String).map { $0.isEmpty ? "没配" : $0 } ?? "没配")")
     out("开机自动打开：\(yes("login"))")
     out("链接分流：\(yes("links"))；暂停：\(yes("linksPaused"))；默认浏览器是手边：\(yes("linksDefault"))；记住的规则 \(r["linkRules"] ?? 0) 条")
 case "import":
@@ -237,11 +226,11 @@ case "secret":
 case "run":
     var pairs: [(String, String)] = []
     while let e = take("--env") {
-        guard let eq = e.firstIndex(of: "=") else { err("--env 的写法是 变量=留存关键词"); exit(2) }
+        guard let eq = e.firstIndex(of: "=") else { err("--env 的写法是 变量=抽屉关键词"); exit(2) }
         pairs.append((String(e[..<eq]), String(e[e.index(after: eq)...])))
     }
     guard let sep = args.firstIndex(of: "--"), sep + 1 < args.count, !pairs.isEmpty else {
-        err("用法：reach run --env 变量=留存关键词 [--env ...] -- 命令 参数…"); exit(2)
+        err("用法：reach run --env 变量=抽屉关键词 [--env ...] -- 命令 参数…"); exit(2)
     }
     let command = Array(args[(sep + 1)...])
     err("等你在手边里批准…")

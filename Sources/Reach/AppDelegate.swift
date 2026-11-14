@@ -12,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var paster: Paster!
     var ambient: Ambient?
     var organizer: Organizer!
-    var rail: AgentRail!
     var bridge: Bridge!
     var shot: ShotController!
     var links: LinkRouter!
@@ -69,7 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         paster = Paster(model: model)
         paster.monitor = monitor
         organizer = Organizer(model: model)
-        rail = AgentRail(model: model)
         bridge = Bridge(model: model)
         if ProcessInfo.processInfo.environment["REACH_KEYFILE"] != "1" { ambient = Ambient(model: model, monitor: monitor) }
         shot = ShotController(model: model, monitor: monitor)
@@ -78,12 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.shot = shot
         model.links = links
         model.organizer = organizer
-        model.rail = rail
         model.hidePanel = { [weak self] in self?.panelController.hide() }
         model.toast = { [weak self] t in self?.toast.show(t) }
         model.importSideNotes = { [weak self] in self?.importSideNotes() }
         bridge.showPanel = { [weak self] in self?.panelController.show(.approval) }
-        rail.onNeedsYou = { [weak self] in self?.panelController.show(.approval) }
         monitor.onCapture = { [weak self] it in
             if it.ctype == .image { self?.organizer.ocr(it) }
             self?.organizer.scheduleNaming()
@@ -104,7 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.purgeExpired()
         if !test { monitor.start() }
         panelController.refreshHandles()
-        if store.settings.agentRail { rail.start() }
         if !bridge.start() { toast.show("手边的本机通信没起来，Agent 暂时连不上它。") }
         purgeTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             if (self?.model.store.purgeExpired() ?? 0) > 0 { self?.model.rebuild() }
@@ -197,8 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else { add(menu, "链接分流（点链接自动去对的浏览器）…", #selector(openSettings)) }
         add(menu, "普通 ⌘V 也按目标窗口调整格式", #selector(toggleAmbient), checked: s.ambientFormat)
         menu.addItem(.separator())
-        add(menu, Connect.claudeConnected ? "断开 Claude Code" : "连接 Claude Code…", #selector(toggleClaude), checked: Connect.claudeConnected)
-        add(menu, Connect.codexConnected ? "断开 Codex" : "连接 Codex…", #selector(toggleCodex), checked: Connect.codexConnected)
+        // 老版本连过 Claude Code / Codex 的：只留一个断开的入口，清掉旧配置
+        if Connect.claudeConnected { add(menu, "断开 Claude Code（旧版连接）", #selector(toggleClaude)) }
+        if Connect.codexConnected { add(menu, "断开 Codex（旧版连接）", #selector(toggleCodex)) }
         add(menu, Connect.cliInstalled ? "命令行 reach 已安装" : "安装命令行 reach…", #selector(installCLI), checked: Connect.cliInstalled)
         add(menu, "复制给 Agent 的使用说明", #selector(copyGuide))
         menu.addItem(.separator())
@@ -236,19 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 
     @objc func toggleClaude() {
-        if Connect.claudeConnected {
-            if confirm("断开 Claude Code？", "会从 ~/.claude/settings.json 里去掉手边的钩子，并取消注册工具。", ok: "断开") { toast.show(Connect.disconnectClaude()) }
-        } else if confirm("连接 Claude Code", "会做两件事：\n1. 在 ~/.claude/settings.json 里加上钩子，让 Claude Code 在等你确认、完成时告诉手边（改之前先备份）。\n2. 把手边注册成它的工具，它需要账号、密钥时可以来查，密钥要你批准才给。", ok: "连接") {
-            toast.show(Connect.connectClaude())
-        }
+        if confirm("断开 Claude Code？", "会从 ~/.claude/settings.json 里去掉手边的钩子，并取消注册工具（改之前先备份）。", ok: "断开") { toast.show(Connect.disconnectClaude()) }
     }
 
     @objc func toggleCodex() {
-        if Connect.codexConnected {
-            if confirm("断开 Codex？", "会从 ~/.codex/config.toml 里去掉手边。", ok: "断开") { toast.show(Connect.disconnectCodex()) }
-        } else if confirm("连接 Codex", "会在 ~/.codex/config.toml 里把手边注册成它的工具（改之前先备份）。Codex 需要账号、密钥时可以来查，密钥要你批准才给。", ok: "连接") {
-            toast.show(Connect.connectCodex())
-        }
+        if confirm("断开 Codex？", "会从 ~/.codex/config.toml 里去掉手边（改之前先备份）。", ok: "断开") { toast.show(Connect.disconnectCodex()) }
     }
 
     @objc func installCLI() { toast.show(Connect.installCLI()) }
@@ -271,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func clearHistory() {
-        guard confirm("清空复制历史？", "留存的内容不受影响。清空后不能恢复。", ok: "清空") else { return }
+        guard confirm("清空复制历史？", "抽屉里的内容不受影响。清空后不能恢复。", ok: "清空") else { return }
         for it in model.store.clips { model.store.delete(it.id) }
         model.rebuild()
     }

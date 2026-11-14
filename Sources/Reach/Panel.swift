@@ -156,7 +156,7 @@ final class PanelController: NSObject {
     func toggle() { if panel.isVisible && panel.isKeyWindow { hide() } else { show(.hotkey) } }
 
     private var pinned: Bool {
-        model.editor != nil || model.template != nil || model.options != nil || model.managingFolders || !model.approvals.isEmpty || model.replyingTo != nil
+        model.editor != nil || model.saving != nil || model.template != nil || model.options != nil || model.managingFolders || !model.approvals.isEmpty || model.replyingTo != nil
             || !model.query.isEmpty || model.busy != nil
     }
 
@@ -214,6 +214,7 @@ final class PanelController: NSObject {
         let chars = e.charactersIgnoringModifiers?.lowercased() ?? ""
         if code == 53 { // Esc：一层一层退
             if model.editor != nil { model.editor = nil }
+            else if model.saving != nil { model.saving = nil }
             else if model.managingFolders { model.managingFolders = false }
             else if model.template != nil { model.template = nil }
             else if model.options != nil { model.options = nil }
@@ -224,11 +225,29 @@ final class PanelController: NSObject {
             else { hide() }
             return true
         }
+        // 手边没有菜单栏（侧栏 App），⌘V 这些编辑键不会自己走到输入框，这里直接转给它
+        let typing = model.editor != nil || model.template != nil || model.managingFolders || model.replyingTo != nil || model.saving != nil
+        if cmd, !opt, panel.firstResponder is NSTextView, let sel = Self.editAction(chars, shift: shift),
+           typing || ["v", "x", "z"].contains(chars) || (chars == "a" && !model.query.isEmpty) {
+            NSApp.sendAction(sel, to: nil, from: nil)
+            return true
+        }
         if model.editor != nil {
             if cmd && (code == 36 || chars == "s") { model.saveEditor(); return true }
             return false
         }
         if model.managingFolders { return false }
+        if let sv = model.saving {
+            let n = model.saveChoices.count
+            switch code {
+            case 125: model.saving?.index = min(n - 1, sv.index + 1); return true
+            case 126: model.saving?.index = max(0, sv.index - 1); return true
+            case 36, 76: chooseSave(); return true
+            default:
+                if cmd && chars == "s" { chooseSave(); return true }
+                return false
+            }
+        }
         if model.template != nil {
             if code == 36 || code == 76 { fillTemplate(); return true }
             return false
@@ -241,12 +260,18 @@ final class PanelController: NSObject {
             case 123: model.options = nil; return true
             case 36, 76: model.chooseOption(model.optionIndex); return true
             default:
+                if cmd && chars == "c" { model.copyOption(model.optionIndex); return true }
+                if cmd && chars == "r", let it = model.selectedItem {
+                    if model.revealed.contains(it.id) { model.revealed.remove(it.id) } else { model.revealed.insert(it.id) }
+                    model.options = model.paster.options(for: it)
+                    return true
+                }
                 if let n = Int(chars), n >= 1, n <= opts.count { model.chooseOption(n - 1); return true }
                 return true
             }
         }
         switch code {
-        case 48 where !cmd: // Tab：最近 ⇄ 留存
+        case 48 where !cmd: // Tab：最近 ⇄ 抽屉
             model.tab = model.tab == .recent ? .kept : .recent; return true
         case 49 where !cmd && model.query.isEmpty: // 空格：放进 / 拿出篮子
             if let it = model.selectedItem { model.toggleBasket(it) }
@@ -270,7 +295,7 @@ final class PanelController: NSObject {
         }
         guard cmd else { return false }
         switch chars {
-        case "s": if let it = model.selectedItem { model.keep(it) }; return true
+        case "s": model.startSave(model.selectedItem); return true
         case "n": model.newNote(); return true
         case "e": if let it = model.selectedItem { model.edit(it) }; return true
         case "b": if let it = model.selectedItem { model.toggleBasket(it); model.move(1) }; return true
@@ -291,6 +316,24 @@ final class PanelController: NSObject {
             for id in model.selectable where !model.basket.contains(id) { model.basket.append(id) }
             return true
         default: return false
+        }
+    }
+
+    private func chooseSave() {
+        guard let sv = model.saving else { return }
+        let cs = model.saveChoices
+        guard cs.indices.contains(sv.index) else { return }
+        model.finishSave(cs[sv.index])
+    }
+
+    static func editAction(_ c: String, shift: Bool) -> Selector? {
+        switch c {
+        case "x": return #selector(NSText.cut(_:))
+        case "c": return #selector(NSText.copy(_:))
+        case "v": return #selector(NSText.paste(_:))
+        case "a": return #selector(NSText.selectAll(_:))
+        case "z": return shift ? Selector(("redo:")) : Selector(("undo:"))
+        default: return nil
         }
     }
 

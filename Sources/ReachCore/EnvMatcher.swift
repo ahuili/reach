@@ -23,7 +23,7 @@ public struct EnvMatch {
     }
 }
 
-/// 项目要哪些配置（环境变量名），在留存里找对应的 Key。只做匹配，放不放行由人决定。
+/// 项目要哪些配置（环境变量名），在抽屉里找对应的 Key。只做匹配，放不放行由人决定。
 public enum EnvMatcher {
     struct Provider { let keys: [String]; let words: [String]; let prefix: String? }
 

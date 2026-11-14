@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-/// 从 SideNotes 搬家：只读打开它的本地库，按原文件夹建好留存。
+/// 从 SideNotes 搬家：只读打开它的本地库，按原文件夹放进抽屉。
 public enum SideNotesImporter {
     public static var candidates: [URL] {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -70,34 +70,5 @@ public enum SideNotesImporter {
         }
         sqlite3_finalize(st)
         return res
-    }
-}
-
-public enum AIError: Error { case notReady, http(Int, String), bad }
-
-/// 最简单的 OpenAI 兼容接口调用。发出去之前调用方必须先把密钥抹掉（SecretDetector.redact）。
-public struct AIClient {
-    public let cfg: AISettings
-    public init(_ cfg: AISettings) { self.cfg = cfg }
-
-    public func complete(system: String, user: String, maxTokens: Int = 600, timeout: TimeInterval = 40) async throws -> String {
-        guard cfg.isReady else { throw AIError.notReady }
-        var base = cfg.baseURL
-        while base.hasSuffix("/") { base.removeLast() }
-        guard let url = URL(string: base + "/chat/completions") else { throw AIError.bad }
-        var req = URLRequest(url: url, timeoutInterval: timeout)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !cfg.apiKey.isEmpty { req.setValue("Bearer \(cfg.apiKey)", forHTTPHeaderField: "Authorization") }
-        let body: [String: Any] = ["model": cfg.model, "temperature": 0.2, "max_tokens": maxTokens,
-                                   "messages": [["role": "system", "content": system], ["role": "user", "content": user]]]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw AIError.http(code, String(data: data.prefix(200), encoding: .utf8) ?? "") }
-        guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let msg = (o["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any],
-              let text = msg["content"] as? String else { throw AIError.bad }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -235,7 +235,7 @@ public enum Markdown {
     }
 }
 
-/// 带空位的留存：{内容}、{正式/随意}
+/// 抽屉里带空位的：{内容}、{正式/随意}
 public enum Template {
     private static let re = try! NSRegularExpression(pattern: "\\{([^{}\\n\"':;=]{1,24})\\}")
 
