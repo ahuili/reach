@@ -171,6 +171,19 @@ check(Magpie.baseURL(home: mhome) == "http://127.0.0.1:4555/v1" && Magpie.baseUR
 let oldAI = try! JSONDecoder().decode(AISettings.self, from: Data(#"{"baseURL":"x","model":"m","apiKey":"","enabled":true}"#.utf8))
 check(oldAI.isReady && !oldAI.vision, "旧版 AI 设置读得进来")
 
+// AI 返回
+check((try? AIError.answer(from: Data(#"{"choices":[{"finish_reason":"stop","message":{"content":"可以","reasoning_content":"想一想"}}]}"#.utf8))) == "可以", "思考型模型的回答")
+check((try? AIError.answer(from: Data(#"{"choices":[{"message":{"content":"<think>嗯</think>\n可以"}}]}"#.utf8))) == "可以", "去掉 think 段")
+do { _ = try AIError.answer(from: Data(#"{"choices":[{"finish_reason":"length","message":{"content":null,"reasoning_content":"…"}}]}"#.utf8)); check(false, "字数用完应报错") }
+catch { check("\(error)".contains("字数用完"), "思考把字数用完：\(error)") }
+let e403 = AIError.http(403, AIError.message(from: Data(#"{"error":{"message":"原 Key: 403 Forbidden: This account only allows Codex official clients"}}"#.utf8)))
+check(e403.description.contains("Codex"), "403 说清原因：\(e403)")
+check(AIError.http(500, AIError.message(from: Data(#"{"error":{"message":"upstream down"}}"#.utf8))).description == "500：upstream down", "错误信息原样给出")
+
+// 检查更新
+check(UpdateCheck.isNewer("v0.5.10", than: "0.5.9") && !UpdateCheck.isNewer("v0.5.1", than: "0.5.1") && !UpdateCheck.isNewer("0.4.9", than: "0.5") && UpdateCheck.isNewer("1.0", than: "0.9.9"), "版本号比较")
+check(UpdateCheck.sha(for: "Reach-0.5.1.zip", in: "ABC123  Reach-0.5.1.zip\ndef  Reach-0.5.1.dmg\n") == "abc123" && UpdateCheck.sha(for: "x.zip", in: "a  y.zip") == nil, "找校验和")
+
 // 目标窗口类别
 check(TargetKind.of(bundle: "com.tencent.xinWeChat") == .chat && TargetKind.of(bundle: "org.tabby") == .terminal
       && TargetKind.of(bundle: "com.microsoft.Outlook") == .rich && TargetKind.of(bundle: "com.openai.codex") == .ai, "目标窗口类别")

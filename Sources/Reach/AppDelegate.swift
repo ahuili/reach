@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var bridge: Bridge!
     var shot: ShotController!
     var links: LinkRouter!
+    var updater: Updater!
     /// 手边还没准备好时收到的链接（被点链接拉起来的那一下）
     private var pendingLinks: [(URL, pid_t?)] = []
     let toast = Toast()
@@ -72,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["REACH_KEYFILE"] != "1" { ambient = Ambient(model: model, monitor: monitor) }
         shot = ShotController(model: model, monitor: monitor)
         links = LinkRouter(model: model)
+        updater = Updater(model: model)
         model.paster = paster
         model.shot = shot
         model.links = links
@@ -94,6 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bridge.testMode = test
         bridge.monitor = monitor
         links.testMode = test
+        updater.testMode = test
+        updater.startAutoCheck()
         links.start()
         for (u, pid) in pendingLinks { links.handle(u, sourcePID: pid) }
         pendingLinks = []
@@ -202,6 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "清空复制历史…", #selector(clearHistory))
         add(menu, "开机自动打开", #selector(toggleLogin), checked: LoginItem.enabled)
         add(menu, "设置…", #selector(openSettings), key: ",")
+        if let r = updater.available { add(menu, "更新到 v\(r.version)…", #selector(checkUpdate)) }
+        else { add(menu, updater.busy ? "正在更新…" : "检查更新（现在 v\(Updater.current)）", #selector(checkUpdate)) }
         if !Keys.trusted { add(menu, "允许自动粘贴（打开辅助功能设置）…", #selector(askTrust)) }
         menu.addItem(.separator())
         add(menu, "退出手边", #selector(quit), key: "q")
@@ -238,6 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleCodex() {
         if confirm("断开 Codex？", "会从 ~/.codex/config.toml 里去掉手边（改之前先备份）。", ok: "断开") { toast.show(Connect.disconnectCodex()) }
     }
+
+    @objc func checkUpdate() { if !updater.busy { updater.check(manual: true) } }
 
     @objc func installCLI() { toast.show(Connect.installCLI()) }
 

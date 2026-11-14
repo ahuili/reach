@@ -242,6 +242,14 @@ final class Bridge {
             }
             if let p = req["snap"] as? String { _ = shot.snapshot(to: p) }
             reply(shot.debugState().merging(["ok": true]) { a, _ in a })
+        case "debug.update":
+            // 检查更新的测试入口：REACH_UPDATE_URL 指向本机假的发布信息；install 会真的换掉这份 App（测试时用的是拷贝）
+            guard let up = app?.updater else { reply(["error": "no updater"]); return }
+            up.check(manual: false) { r in
+                guard let r else { reply(["ok": true, "available": ""]); return }
+                if req["install"] as? Bool == true { up.install(r) { err in reply(["ok": err == nil, "available": r.version, "error": err ?? ""]) } }
+                else { reply(["ok": true, "available": r.version]) }
+            }
         case "debug.snapshot":
             let ok = app?.panelController.snapshot(to: req["path"] as? String ?? "") ?? false
             reply(["ok": ok])

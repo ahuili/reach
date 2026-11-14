@@ -113,7 +113,7 @@ codex mcp add reach -- /Applications/Reach.app/Contents/MacOS/reachctl mcp      
 brew install --cask ahuili/tap/reach
 ```
 
-会顺带把命令行 `reach` 装进 PATH。以后升级：`brew upgrade --cask reach`
+会顺带把命令行 `reach` 装进 PATH。以后升级：点菜单栏图标 › 检查更新（下载后核对校验和与签名，自动重新打开），或者 `brew upgrade --cask reach`
 
 ### 方式二：一行脚本
 

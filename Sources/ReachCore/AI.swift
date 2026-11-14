@@ -1,15 +1,46 @@
 import Foundation
 
 public enum AIError: Error, CustomStringConvertible {
-    case notReady, http(Int, String), bad
+    case notReady, http(Int, String), bad, truncated
 
     public var description: String {
         switch self {
         case .notReady: return "还没在设置里选 AI 模型"
-        case .http(401, _), .http(403, _): return "API Key 不对或没有权限"
-        case .http(let c, let b): return "HTTP \(c) \(b)"
+        case .http(let c, let m):
+            if m.contains("only allows Codex official clients") { return "这个模型的账号只给 Codex 官方客户端用（\(c)）。在 Magpie 里换带「Codex」的同名模型试试" }
+            if m.isEmpty { return c == 401 || c == 403 ? "没有权限（\(c)），检查 API Key" : "HTTP \(c)" }
+            return "\(c)：\(m)"
         case .bad: return "模型的回答读不懂"
+        case .truncated: return "模型想得太久，字数用完了还没给出回答，换一个不带思考的模型试试"
         }
+    }
+
+    /// 从出错的返回里挑出人能看懂的那句（OpenAI 格式的 error.message，或者原文开头）
+    public static func message(from data: Data) -> String {
+        if let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            if let e = o["error"] as? [String: Any], let m = e["message"] as? String { return String(m.prefix(200)) }
+            if let m = o["error"] as? String { return String(m.prefix(200)) }
+            if let m = o["message"] as? String { return String(m.prefix(200)) }
+        }
+        return String((String(data: data.prefix(200), encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// 从成功的返回里拿出回答：content 可能是字符串、数组，或者是 null（思考型模型把字数用在思考上了）
+    public static func answer(from data: Data) throws -> String {
+        guard let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choice = (o["choices"] as? [[String: Any]])?.first,
+              let msg = choice["message"] as? [String: Any] else { throw AIError.bad }
+        var text = ""
+        if let t = msg["content"] as? String { text = t }
+        else if let parts = msg["content"] as? [[String: Any]] { text = parts.compactMap { $0["text"] as? String }.joined() }
+        // 有的模型把思考过程用 <think>…</think> 写在回答前面
+        if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            if choice["finish_reason"] as? String == "length" { throw AIError.truncated }
+            throw AIError.bad
+        }
+        return text
     }
 }
 
@@ -32,19 +63,13 @@ public struct AIClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !cfg.apiKey.isEmpty { req.setValue("Bearer \(cfg.apiKey)", forHTTPHeaderField: "Authorization") }
-        let body: [String: Any] = ["model": cfg.model, "temperature": temperature, "max_tokens": maxTokens, "messages": messages]
+        // 思考型模型（DeepSeek、GLM、Kimi 这些）先把字数花在思考上：给够余量，回答本身照样短
+        let body: [String: Any] = ["model": cfg.model, "temperature": temperature, "max_tokens": max(maxTokens, 4096), "messages": messages]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw AIError.http(code, String(data: data.prefix(200), encoding: .utf8) ?? "") }
-        guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let msg = (o["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any] else { throw AIError.bad }
-        // 有的服务把 content 给成数组
-        if let text = msg["content"] as? String { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        if let parts = msg["content"] as? [[String: Any]] {
-            return parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        throw AIError.bad
+        guard code == 200 else { throw AIError.http(code, AIError.message(from: data)) }
+        return try AIError.answer(from: data)
     }
 }
 
@@ -165,5 +190,30 @@ public enum ShotAI {
         if let c = code, !c.isEmpty { out.append(.code(c.joined(separator: "\n"))) }
         flush()
         return out
+    }
+}
+
+/// 检查更新用的小工具：版本号比较、从 SHA256SUMS 里找某个文件的校验和
+public enum UpdateCheck {
+    /// "v0.5.10" 比 "0.5.9" 新；只比数字段
+    public static func isNewer(_ a: String, than b: String) -> Bool {
+        func parts(_ s: String) -> [Int] {
+            s.trimmingCharacters(in: CharacterSet(charactersIn: "vV ")).split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        }
+        let x = parts(a), y = parts(b)
+        for i in 0..<max(x.count, y.count) {
+            let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
+            if p != q { return p > q }
+        }
+        return false
+    }
+
+    /// SHA256SUMS 每行「校验和  文件名」
+    public static func sha(for file: String, in sums: String) -> String? {
+        for l in sums.split(whereSeparator: \.isNewline) {
+            let f = l.split(separator: " ", omittingEmptySubsequences: true)
+            if f.count >= 2, f.last.map(String.init) == file { return String(f[0]).lowercased() }
+        }
+        return nil
     }
 }
