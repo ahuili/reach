@@ -4,6 +4,8 @@
 #   --universal  同时编 Apple 芯片 + Intel，合成通用二进制（发布用）
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# SwiftPM 5.10 在 TMPDIR 带中文时解析 Package.swift 会直接崩（exit 133，没有任何输出）
+if print -r -- "${TMPDIR:-}" | LC_ALL=C grep -q '[^ -~]'; then export TMPDIR=/tmp/; fi
 source scripts/repo.env
 VERSION=$(cat VERSION)
 INSTALL=0; UNIVERSAL=0

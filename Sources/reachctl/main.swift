@@ -170,7 +170,7 @@ case "status":
     out("最近复制 \(r["clips"] ?? 0) 条，抽屉 \(r["kept"] ?? 0) 条（\(r["folders"] ?? 0) 个文件夹），其中含密钥 \(r["sensitive"] ?? 0) 条")
     out("打开侧栏 \((r["panellabel"] as? String) ?? "⇧⌘V") 注册成功：\(yes("hotkey"))；备用 ⌃⌥V：\(yes("hotkey2"))")
     out("截图快捷键 \((r["shotlabel"] as? String) ?? "⌃⌥A")：\(yes("shotkey"))；屏幕录制权限：\(yes("screen"))")
-    out("自动粘贴（辅助功能权限）：\(yes("autopaste"))；暂停记录：\(yes("paused"))")
+    out("自动粘贴（辅助功能权限）：\(yes("autopaste"))；长按 ⌘V 就地候选：\(yes("holdpaste"))；暂停记录：\(yes("paused"))")
     out("命令行已安装：\(yes("cli"))；AI 模型：\((r["ai"] as? String).map { $0.isEmpty ? "没配" : $0 } ?? "没配")")
     out("开机自动打开：\(yes("login"))")
     out("链接分流：\(yes("links"))；暂停：\(yes("linksPaused"))；默认浏览器是手边：\(yes("linksDefault"))；记住的规则 \(r["linkRules"] ?? 0) 条")

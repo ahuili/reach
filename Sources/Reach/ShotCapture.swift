@@ -77,7 +77,9 @@ struct ShotReading {
     static func read(_ img: CGImage) -> ShotReading {
         let req = VNRecognizeTextRequest()
         req.recognitionLevel = .accurate
-        req.recognitionLanguages = ["zh-Hans", "en-US"]
+        // 只给中英两种时日文、韩文一个字都认不出；打开自动识别后四种都能认，中文不受影响（实测）
+        req.recognitionLanguages = ["zh-Hans", "en-US", "ja-JP", "ko-KR"]
+        req.automaticallyDetectsLanguage = true
         req.usesLanguageCorrection = false
         try? VNImageRequestHandler(cgImage: img, options: [:]).perform([req])
         var out = ShotReading()

@@ -53,8 +53,8 @@ struct PrimaryButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Text(title).font(.system(size: 12, weight: .semibold))
-                if let s = shortcut { Text(s).font(.system(size: 10.5, weight: .medium)).opacity(0.6) }
+                Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
+                if let s = shortcut { Text(s).font(.system(size: 10.5, weight: .medium)).opacity(0.6).lineLimit(1).fixedSize() }
             }
             .foregroundStyle(Palette.brandInk)
             .padding(.horizontal, 11).padding(.vertical, 5)
@@ -73,7 +73,7 @@ struct QuietButton: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 if let i = icon { Image(systemName: i).font(.system(size: 10.5, weight: .semibold)) }
-                Text(title).font(.system(size: 12, weight: .medium))
+                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1).fixedSize()
             }
             .foregroundStyle(role)
             .padding(.horizontal, 10).padding(.vertical, 5)
@@ -551,11 +551,15 @@ struct FooterView: View {
                     Circle().fill(Palette.brand)
                     Text("\(model.basket.count)").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Palette.brandInk).monospacedDigit()
                 }.frame(width: 20, height: 20)
-                Text("已选").font(.system(size: 12, weight: .medium))
+                // 选了两条以上多一个「按顺序贴」，地方不够：「已选」两个字省掉
+                if model.basket.count < 2 { Text("已选").font(.system(size: 12, weight: .medium)) }
                 Spacer(minLength: 0)
                 QuietButton(title: "清空") { model.basket = [] }
                 QuietButton(title: "放进抽屉") { model.startSave(nil) }.help("⌘S：合成一条，或加到抽屉里已有的一条后面")
-                PrimaryButton(title: "合成一段贴", shortcut: "⌘↩") { model.paster.pasteBasket() }
+                if model.basket.count > 1 {
+                    QuietButton(title: "按顺序贴") { model.inline.startSequence(model.basket) }.help("之后每按一次 ⌘V 贴下一条，适合填表单。Esc 结束")
+                }
+                PrimaryButton(title: "合成一段贴", shortcut: model.basket.count < 2 ? "⌘↩" : nil) { model.paster.pasteBasket() }.help("⌘↩")
             } else {
                 Text("↩ 贴   → 只贴一部分   空格 多选   Tab 切换").font(.system(size: 10.5)).foregroundStyle(.tertiary).lineLimit(1)
                 Spacer(minLength: 0)

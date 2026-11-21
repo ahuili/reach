@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var shot: ShotController!
     var links: LinkRouter!
     var updater: Updater!
+    var inline: InlinePaster!
     /// 手边还没准备好时收到的链接（被点链接拉起来的那一下）
     private var pendingLinks: [(URL, pid_t?)] = []
     let toast = Toast()
@@ -74,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shot = ShotController(model: model, monitor: monitor)
         links = LinkRouter(model: model)
         updater = Updater(model: model)
+        inline = InlinePaster(model: model)
+        model.inline = inline
+        inline.openPanel = { [weak self] in self?.panelController.show(.hotkey) }
         model.paster = paster
         model.shot = shot
         model.links = links
@@ -97,6 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bridge.monitor = monitor
         links.testMode = test
         updater.testMode = test
+        inline.testMode = test
+        bridge.inline = inline
         updater.startAutoCheck()
         links.start()
         for (u, pid) in pendingLinks { links.handle(u, sourcePID: pid) }
@@ -110,6 +116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if !test {
+            syncInline()
+            // 刚给了辅助功能权限的：过一会儿再试着装上
+            if !inline.running { Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] t in
+                guard let self else { t.invalidate(); return }
+                if self.inline.running || !self.model.settings.holdPaste { t.invalidate() } else { self.syncInline() }
+            } }
             applyHotkeys()
             if !hotkeyOK { toast.show("\(model.settings.panelKey.label) 被别的 App 占着（多半是 Paste）。先用 ⌃⌥V 叫出手边，或者在设置里换一个快捷键。") }
         }
@@ -173,6 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if on { for id: UInt32 in [1, 2, 3] { HotKey.unregister(id: id) } } else { applyHotkeys() }
     }
 
+    /// 按设置装上或拆掉长按 ⌘V 的键盘拦截（按顺序贴进行中时不拆）
+    func syncInline() {
+        guard !inline.testMode else { return }
+        if model.settings.holdPaste { inline.start() } else if inline.sequence.isEmpty { inline.stop() }
+    }
+
     @objc func toggleShotRedact() { model.settings.shotRedact.toggle() }
 
     // MARK: 菜单
@@ -203,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "复制给 Agent 的使用说明", #selector(copyGuide))
         menu.addItem(.separator())
         if SideNotesImporter.available != nil { add(menu, "从 SideNotes 搬家…", #selector(importSideNotesAction)) }
+        if PasteImporter.available != nil { add(menu, "从 Paste 搬家…", #selector(importPasteAction)) }
         add(menu, "清空复制历史…", #selector(clearHistory))
         add(menu, "开机自动打开", #selector(toggleLogin), checked: LoginItem.enabled)
         add(menu, "设置…", #selector(openSettings), key: ",")
@@ -255,6 +274,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func importSideNotesAction() { importSideNotes() }
+
+    @objc func importPasteAction() {
+        guard let url = PasteImporter.available else { toast.show("没找到 Paste 的数据"); return }
+        let entries = PasteImporter.read(url)
+        let boards = Set(entries.compactMap(\.board))
+        let history = entries.filter { $0.board == nil }.count
+        guard !entries.isEmpty else { toast.show("Paste 的数据读不出来（可能是新版本换了格式）"); return }
+        let text = "Paste 里有 \(history) 条复制历史" + (boards.isEmpty ? "" : "、\(boards.count) 个 Pinboard 共 \(entries.count - history) 条") +
+            "。\n\n复制历史进「最近复制」，按 Paste 里最后用过的时间排，从今天起按手边的保留时间算；Pinboard 进抽屉，文件夹同名。整条是密钥的复制不搬（手边对复制到的密钥只留一小时）。重复的会跳过，Paste 里的原件不动。"
+        guard confirm("从 Paste 搬家？", text, ok: "搬过来") else { return }
+        let r = importPaste(entries)
+        toast.show("搬过来 \(r["clips"] ?? 0) 条复制历史、\(r["kept"] ?? 0) 条放进抽屉（\(r["boards"] ?? 0) 个新文件夹）" +
+                   ((r["secrets"] as? Int ?? 0) > 0 ? "，\(r["secrets"]!) 条密钥没搬" : "") + "。Paste 里的原件没有动。")
+    }
+
+    /// 搬 Paste 的数据（菜单和测试入口共用）
+    @discardableResult
+    func importPaste(_ entries: [PasteImporter.Entry]) -> [String: Any] {
+        let r = PasteImporter.importInto(model.store, entries: entries) { d in
+            NSBitmapImageRep(data: d)?.representation(using: .png, properties: [:])
+        }
+        model.rebuild()
+        // 搬来的截图在本机认一遍字，能搜到
+        for it in model.store.clips where it.origin == .imported && it.ctype == .image && it.ocr == nil { organizer.ocr(it) }
+        return ["clips": r.clips, "kept": r.kept, "images": r.images, "boards": r.boards, "skipped": r.skipped, "secrets": r.secrets, "unreadable": r.unreadable]
+    }
 
     @discardableResult
     func importSideNotes() -> [String: Any] {

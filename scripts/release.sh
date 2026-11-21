@@ -4,6 +4,8 @@
 #       scripts/release.sh --publish  打包后打 tag、推送、建 GitHub Release、更新 brew tap（需要 gh 已登录）
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# SwiftPM 5.10 在 TMPDIR 带中文时解析 Package.swift 会直接崩（exit 133，没有任何输出）
+if print -r -- "${TMPDIR:-}" | LC_ALL=C grep -q '[^ -~]'; then export TMPDIR=/tmp/; fi
 source scripts/repo.env
 VERSION=$(cat VERSION)
 PUBLISH=0; [[ "${1:-}" == "--publish" ]] && PUBLISH=1

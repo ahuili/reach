@@ -117,28 +117,38 @@ public enum Magpie {
 
 /// 截图里的字交给模型：原位翻译、看懂这张图
 public enum ShotAI {
-    /// 图里的字大多是中文就译成英文，否则译成中文
+    static func isHan(_ u: Unicode.Scalar) -> Bool { (0x4E00...0x9FFF).contains(u.value) || (0x3400...0x4DBF).contains(u.value) }
+    /// 日文假名、韩文：有它们就不是中文
+    static func isKanaOrHangul(_ u: Unicode.Scalar) -> Bool {
+        (0x3040...0x30FF).contains(u.value) || (0x31F0...0x31FF).contains(u.value) || (0xFF66...0xFF9F).contains(u.value)
+            || (0xAC00...0xD7AF).contains(u.value) || (0x1100...0x11FF).contains(u.value) || (0x3130...0x318F).contains(u.value)
+    }
+
+    /// 图里的字大多是中文就译成英文，否则（英文、日文、韩文等）译成中文。日文里也有汉字，看到假名就不算中文
     public static func translateTarget(_ lines: [String]) -> String {
-        var cjk = 0, latin = 0
+        var han = 0, foreign = 0
         for l in lines { for u in l.unicodeScalars {
-            if (0x4E00...0x9FFF).contains(u.value) { cjk += 1 } else if CharacterSet.letters.contains(u), u.isASCII { latin += 1 }
+            if isHan(u) { han += 1 }
+            else if isKanaOrHangul(u) { foreign += 2 }   // 日文里假名比汉字少时也要认得出
+            else if CharacterSet.letters.contains(u) { foreign += 1 }
         } }
-        return cjk * 2 >= latin && cjk > 0 ? "English" : "简体中文"
+        return han > 0 && han * 2 >= foreign ? "English" : "简体中文"
     }
 
     /// 一行值不值得翻：太短、纯数字符号、本来就是目标语言的不翻
     public static func worthTranslating(_ line: String, to target: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         guard t.count >= 2, t.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return false }
-        let hasCJK = t.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
-        if target == "简体中文" { return t.unicodeScalars.contains { $0.isASCII && CharacterSet.letters.contains($0) } || (!hasCJK) }
-        return hasCJK
+        let hasHan = t.unicodeScalars.contains(where: isHan)
+        // 译成中文：带假名、韩文、拉丁等外文字母的行要翻；全是汉字的（中文，或日文里的「設定」这种）看得懂，不翻
+        if target == "简体中文" { return t.unicodeScalars.contains { CharacterSet.letters.contains($0) && !isHan($0) } }
+        return hasHan
     }
 
     public static func translateSystem(target: String) -> String {
         """
         你是截图翻译。用户给你从一张截图里按行认出的文字（JSON 数组，每项是一行，可能有认字错误）。
-        把每一行翻译成\(target)，结合上下文理解（相邻行常是同一句话被折行），但输出必须和输入一一对应、行数相同。
+        把每一行翻译成\(target)（原文可能是英文、日文、韩文等任何语言），结合上下文理解（相邻行常是同一句话被折行），但输出必须和输入一一对应、行数相同。
         专有名词、代码、命令、网址、数字、人名保持原样。界面按钮类短词用常见的界面译法。
         只输出一个 JSON 字符串数组，不要解释，不要代码块记号。
         """
@@ -185,7 +195,11 @@ public enum ShotAI {
                 if let c = code { out.append(.code(c.joined(separator: "\n"))); code = nil } else { flush(); code = [] }
                 continue
             }
-            if code != nil { code!.append(l) } else { buf.append(l) }
+            if code != nil { code!.append(l); continue }
+            // 卡片里的文字不认 Markdown 的引用记号「> 」，去掉，免得露出一排 >
+            var t = l
+            if t.hasPrefix("> ") { t.removeFirst(2) } else if t == ">" { t = "" }
+            buf.append(t)
         }
         if let c = code, !c.isEmpty { out.append(.code(c.joined(separator: "\n"))) }
         flush()

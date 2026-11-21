@@ -134,8 +134,13 @@ public struct Settings: Codable, Equatable {
     public var paused = false
     /// 普通 ⌘V 时也按目标窗口调整格式
     public var ambientFormat = false
+    /// 复制历史保留几天；0 = 不限（仍最多留 \(Settings.unlimitedCap) 条）
     public var retentionDays = 30
     public var secretClipMinutes = 60
+    /// 长按 ⌘V 在光标旁出候选条
+    public var holdPaste = true
+    /// 按住多久算长按（秒）
+    public var holdDelay = 0.3
     public var hotEdge = true
     public var edgeLeft = false
     /// 屏幕边上露一个小把手：鼠标滑上去或点一下打开侧栏
@@ -156,12 +161,18 @@ public struct Settings: Codable, Equatable {
     public var ai = AISettings()
     public init() {}
 
+    public static let unlimitedCap = 20000
+    /// 复制历史最多留几条
+    public var maxClips: Int { retentionDays == 0 ? Settings.unlimitedCap : 3000 }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
         ambientFormat = try c.decodeIfPresent(Bool.self, forKey: .ambientFormat) ?? false
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
         secretClipMinutes = try c.decodeIfPresent(Int.self, forKey: .secretClipMinutes) ?? 60
+        holdPaste = try c.decodeIfPresent(Bool.self, forKey: .holdPaste) ?? true
+        holdDelay = try c.decodeIfPresent(Double.self, forKey: .holdDelay) ?? 0.3
         hotEdge = try c.decodeIfPresent(Bool.self, forKey: .hotEdge) ?? true
         edgeLeft = try c.decodeIfPresent(Bool.self, forKey: .edgeLeft) ?? false
         edgeHandle = try c.decodeIfPresent(Bool.self, forKey: .edgeHandle) ?? true

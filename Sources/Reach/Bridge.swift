@@ -10,6 +10,7 @@ final class Bridge {
     var testMode = false
     weak var monitor: ClipboardMonitor?
     weak var shot: ShotController?
+    weak var inline: InlinePaster?
 
     init(model: AppModel) { self.model = model }
 
@@ -56,7 +57,7 @@ final class Bridge {
             let app = NSApp.delegate as? AppDelegate
             reply(["ok": true, "clips": store.clips.count, "kept": store.kept.count, "folders": store.folders.count,
                    "sensitive": store.items.values.filter { $0.sensitive }.count,
-                   "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "shotkey": app?.shotHotkeyOK ?? false, "shotlabel": model.settings.shotKey.label, "panellabel": model.settings.panelKey.label, "screen": ShotGrab.allowed, "autopaste": Keys.trusted,
+                   "hotkey": app?.hotkeyOK ?? false, "hotkey2": app?.hotkey2OK ?? false, "shotkey": app?.shotHotkeyOK ?? false, "shotlabel": model.settings.shotKey.label, "panellabel": model.settings.panelKey.label, "screen": ShotGrab.allowed, "autopaste": Keys.trusted, "holdpaste": app?.inline.running ?? false,
                    "paused": store.settings.paused, 
                    "cli": Connect.cliInstalled, "ai": store.settings.ai.isReady ? store.settings.ai.model : "", "login": LoginItem.enabled,
                    "links": store.settings.links.enabled, "linksPaused": store.settings.links.paused, "linksDefault": LinkRouter.isDefault, "linkRules": store.settings.links.rules.count])
@@ -250,6 +251,50 @@ final class Bridge {
                 if req["install"] as? Bool == true { up.install(r) { err in reply(["ok": err == nil, "available": r.version, "error": err ?? ""]) } }
                 else { reply(["ok": true, "available": r.version]) }
             }
+        case "debug.inline":
+            // 就地候选的测试入口。key：按键（vdown/vup/cmdup/timer/esc/right/left/down/return/1-5）；show：不读光标直接按给定输入框算一遍画出来
+            guard let inl = inline else { reply(["error": "no inline"]); return }
+            var out: [String: Any] = [:]
+            if let f = req["show"] as? String {
+                let field = InputField(rawValue: f) ?? .other
+                let target = TargetKind(rawValue: req["target"] as? String ?? "other") ?? .other
+                let pt = (req["x"] as? Double).flatMap { x in (req["y"] as? Double).map { CGPoint(x: x, y: $0) } }
+                let cands = inl.debugShow(field: field, target: target, bundle: req["bundle"] as? String, hints: req["hints"] as? [String] ?? [], at: pt)
+                out["candidates"] = cands.map { ["id": $0.itemId, "title": $0.title, "detail": $0.detail, "value": $0.value ?? "", "secret": $0.secret] }
+            }
+            if let k = req["key"] as? String {
+                let codes: [String: Int] = ["esc": 53, "return": 36, "left": 123, "right": 124, "down": 125, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23]
+                let key: HoldPaste.Key
+                switch k {
+                case "vdown": key = .vDown(repeat: false, shift: false, cmd: true, otherMods: false)
+                case "vdown-shift": key = .vDown(repeat: false, shift: true, cmd: true, otherMods: false)
+                case "vrepeat": key = .vDown(repeat: true, shift: false, cmd: true, otherMods: false)
+                case "vup": key = .vUp
+                case "cmdup": key = .cmdUp
+                case "timer": key = .timer
+                default: key = .other(code: codes[k] ?? 0)
+                }
+                _ = inl.debugKey(key)
+            }
+            if let i = req["index"] as? Int { inl.debugIndex(i) }
+            if let ids = req["sequence"] as? [String] { inl.startSequence(ids) }
+            if req["next"] as? Bool == true { inl.pasteNextInSequence() }
+            if req["reset"] as? Bool == true { model.lastInlinePick = nil }
+            // 等主线程上排着的事做完再回（候选条是异步画的）
+            DispatchQueue.main.asyncAfter(deadline: .now() + (req["wait"] as? Double ?? 0.05)) {
+                var o = out
+                for (k, v) in inl.debugState { o[k] = v }
+                o["pick"] = self.model.lastInlinePick ?? ""
+                if let p = req["path"] as? String { o["saved"] = inl.debugSnapshot(to: p) }
+                reply(o)
+            }
+        case "debug.importPaste":
+            // 从 Paste 搬家的测试入口：path 指向一份拷贝的 db.sqlite（旁边要有 .db_SUPPORT）
+            guard let p = req["path"] as? String, let app else { reply(["error": "no path"]); return }
+            let entries = PasteImporter.read(URL(fileURLWithPath: p))
+            var r = app.importPaste(entries)
+            r["read"] = entries.count
+            reply(r)
         case "debug.snapshot":
             let ok = app?.panelController.snapshot(to: req["path"] as? String ?? "") ?? false
             reply(["ok": ok])

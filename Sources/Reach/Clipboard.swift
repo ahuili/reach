@@ -52,11 +52,15 @@ enum Keys {
         _ = AXIsProcessTrustedWithOptions(opts)
     }
 
+    /// 手边自己发的按键带这个记号，就地候选的键盘拦截认得出来、直接放过
+    static let marker: Int64 = 0x5245_4143_48
+
     static func post(key: CGKeyCode, flags: CGEventFlags = []) {
         let src = CGEventSource(stateID: .combinedSessionState)
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: down)
             e?.flags = flags
+            e?.setIntegerValueField(.eventSourceUserData, value: marker)
             e?.post(tap: .cghidEventTap)
         }
     }
@@ -157,9 +161,10 @@ final class ClipboardMonitor {
     }
 
     /// 整条是密钥的留 1 小时（可设置）；夹着密钥的留一天；其他按保留天数
-    private func expiry(_ it: Item, _ now: Date) -> Date {
+    private func expiry(_ it: Item, _ now: Date) -> Date? {
         if it.ctype == .secret { return now.addingTimeInterval(Double(store.settings.secretClipMinutes) * 60) }
         if it.sensitive { return now.addingTimeInterval(max(86400, Double(store.settings.secretClipMinutes) * 60)) }
+        if store.settings.retentionDays == 0 { return nil }
         return now.addingTimeInterval(Double(store.settings.retentionDays) * 86400)
     }
 

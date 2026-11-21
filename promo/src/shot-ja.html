@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<!-- 介绍视频「截图翻译」用的示意画面：虚构的日文开发文档页，不是任何真实网站 -->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1512px; height: 982px; font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+    background: radial-gradient(900px 600px at 20% 20%, #5b4320 0%, transparent 60%), linear-gradient(160deg, #1d1a22, #2a2430 55%, #17161b); }
+  .win { position: absolute; left: 150px; top: 70px; width: 1210px; height: 840px; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .bar { height: 44px; background: #ececf0; display: flex; align-items: center; padding: 0 16px; gap: 8px; border-bottom: 1px solid #ddd; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .url { margin-left: 120px; flex: 1; max-width: 640px; height: 28px; border-radius: 8px; background: #fff; font: 14px -apple-system; color: #666; display: flex; align-items: center; padding: 0 12px; }
+  .page { padding: 44px 70px; color: #222; }
+  .crumb { font-size: 15px; color: #888; }
+  h1 { margin-top: 14px; font-size: 38px; font-weight: 700; }
+  p { margin-top: 22px; font-size: 22px; line-height: 1.75; color: #333; }
+  .warn { margin-top: 30px; padding: 20px 24px; border-radius: 10px; background: #fff4e5; border: 1px solid #f3c27a; font-size: 21px; line-height: 1.7; color: #7a4b00; }
+  code { font: 19px "SF Mono", Menlo, monospace; background: #f2f2f5; padding: 2px 8px; border-radius: 6px; color: #b4361d; }
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><div class="url">docs.example.jp/api/rate-limit</div></div>
+  <div class="page">
+    <div class="crumb">ドキュメント › API リファレンス</div>
+    <h1>API のレート制限について</h1>
+    <p>各アカウントは 1 分あたり 60 回までリクエストできます。</p>
+    <p>上限を超えると、しばらくの間リクエストが拒否されます。</p>
+    <div class="warn">リクエストが多すぎます。しばらくしてから再度お試しください。<br><code>429 Too Many Requests</code></div>
+    <p>上限を引き上げたい場合は、管理画面から申請してください。</p>
+  </div>
+</div>
+</body>
+</html>

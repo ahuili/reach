@@ -158,6 +158,10 @@ let now = Date()
 // 截图翻译、看懂
 check(ShotAI.translateTarget(["Settings", "Sign in to continue"]) == "简体中文" && ShotAI.translateTarget(["设置", "登录后继续"]) == "English", "翻译方向")
 check(ShotAI.worthTranslating("Sign in", to: "简体中文") && !ShotAI.worthTranslating("12:30", to: "简体中文") && !ShotAI.worthTranslating("登录", to: "简体中文"), "哪些行要翻")
+check(ShotAI.translateTarget(["設定を保存しました", "ログインしてください", "東京都"]) == "简体中文", "日文译成中文")
+check(ShotAI.translateTarget(["ファイル", "ログイン"]) == "简体中文" && ShotAI.translateTarget(["설정이 저장되었습니다"]) == "简体中文", "纯假名、韩文也译成中文")
+check(ShotAI.worthTranslating("ログインしてください", to: "简体中文") && ShotAI.worthTranslating("設定を保存しました", to: "简体中文"), "日文行要翻（含汉字的也翻）")
+check(ShotAI.translateTarget(["设置已保存", "请先登录 GitHub 再继续"]) == "English", "中文还是译成英文")
 check(ShotAI.parseLines("```json\n[\"设置\", \"登录\"]\n```", count: 2) == ["设置", "登录"], "解析译文（带代码块记号）")
 check(ShotAI.parseLines("[\"设置\"]", count: 2) == nil, "行数对不上就不用")
 check(ShotAI.segments("原因是端口被占。\n```bash\nlsof -i :3000\n```\n然后重启。") == [.text("原因是端口被占。"), .code("lsof -i :3000"), .text("然后重启。")], "回答拆出代码块")
@@ -288,6 +292,163 @@ do {
 }
 
 // 用真实的 SideNotes 库试跑导入，只输出统计数字（不输出任何内容）。REACH_IMPORT_STATS=1 时才跑，数据进临时目录。
+check(ShotAI.segments("译文：\n> 第一行\n>\n> 第二行") == [.text("译文：\n第一行\n\n第二行")], "引用记号去掉")
+
+// 就地候选：排序
+do {
+    let now = Date()
+    func clip(_ t: String, ago: TimeInterval, app: String? = nil, ctype: ContentType? = nil) -> Item {
+        var it = Item(kind: .clip, text: t, sourceApp: app, createdAt: now.addingTimeInterval(-ago), hash: "c-" + t)
+        it.ctype = ctype ?? Classifier.classify(t); return it
+    }
+    let fresh = clip("刚复制的一段话", ago: 30, app: "Safari")
+    let old = clip("昨天的一段话", ago: 30 * 3600)
+    let cmd = clip("git push origin main", ago: 4000, ctype: .command)
+    let key = clip(fake, ago: 600, ctype: .secret)
+    var gh = Item(kind: .kept, text: "GitHub\n账号 me@example.com\n密码 Gh!pass9word", hash: "k-gh"); gh.title = "GitHub"; gh.sensitive = true; gh.ctype = .credential
+    var aws = Item(kind: .kept, text: "AWS 控制台\n账号 ops@corp.example\n密码 Aws#9secretpw", hash: "k-aws"); aws.title = "AWS"; aws.sensitive = true; aws.ctype = .credential
+    var note2 = Item(kind: .kept, text: "一段很少用的笔记", hash: "k-note")
+    note2.useCount = 0
+    let pool2 = [fresh, old, cmd, key, gh, aws, note2]
+
+    let chat = InlineRank.rank(pool2, folders: [], ctx: InlineContext(field: .chat, target: .chat, now: now))
+    check(chat.first?.itemId == fresh.id, "聊天窗口：刚复制的排第一")
+    check(!chat.contains { $0.itemId == key.id || $0.itemId == gh.id || $0.itemId == aws.id }, "聊天窗口不出现密钥")
+    check(!chat.contains { $0.itemId == note2.id }, "抽屉里不相关的不挤进来")
+
+    let pw = InlineRank.rank(pool2, folders: [], ctx: InlineContext(field: .password, target: .browser, hints: ["Sign in to GitHub · GitHub"], now: now))
+    check(pw.first?.itemId == gh.id && pw.first?.value == "Gh!pass9word", "密码框：和网站对得上的密码排第一，只贴密码（实际 \(pw.map(\.title))）")
+    check(pw.allSatisfy { $0.secret } && !pw.contains { $0.itemId == fresh.id }, "密码框只给密码")
+    check(pw.allSatisfy { !$0.title.contains("Gh!pass9word") && !$0.title.contains("Aws#9secretpw") }, "候选条上看不到密码原文")
+
+    let acct = InlineRank.rank(pool2, folders: [], ctx: InlineContext(field: .account, target: .browser, hints: ["AWS Management Console"], now: now))
+    check(acct.first?.itemId == aws.id && acct.first?.value == "ops@corp.example", "账号框：贴账号（实际 \(acct.map { $0.value ?? "-" })）")
+
+    let term = InlineRank.rank(pool2, folders: [], ctx: InlineContext(field: .terminal, target: .terminal, now: now))
+    check(term.first?.itemId == fresh.id && term.dropFirst().first?.itemId == cmd.id, "终端：刚复制的之后是命令")
+    check(term.first { $0.itemId == key.id }.map { !$0.title.contains(fake) } ?? true, "终端里出现的密钥也打码")
+
+    var used = clip("在 Tabby 里常贴的", ago: 3 * 86400); used.useByApp["org.tabby"] = 4
+    let other = InlineRank.rank([old, used], folders: [], ctx: InlineContext(field: .other, target: .terminal, bundle: "org.tabby", now: now))
+    check(other.first?.itemId == used.id, "在这个 App 里常贴的排前")
+    let dup = InlineRank.rank([fresh, fresh], folders: [], ctx: InlineContext(field: .other, target: .other, now: now))
+    check(dup.count == 1, "同样的内容只出一次")
+
+    check(InlineContext.field(role: "AXTextField", subrole: "AXSecureTextField", texts: [], target: .browser) == .password, "认出密码框")
+    check(InlineContext.field(role: "AXTextField", subrole: nil, texts: ["Address and search bar"], target: .browser) == .url, "认出地址栏")
+    check(InlineContext.field(role: "AXTextField", subrole: nil, texts: ["请输入邮箱"], target: .other) == .account, "认出账号框")
+    check(InlineContext.field(role: "AXTextArea", subrole: nil, texts: [], target: .chat) == .chat, "聊天输入框")
+}
+
+// 就地候选：长按 ⌘V 的按键判定
+do {
+    var m = HoldPaste()
+    let down = HoldPaste.Key.vDown(repeat: false, shift: false, cmd: true, otherMods: false)
+    var r = m.handle(down)
+    check(r.swallow && r.effects == [.startTimer], "按下 ⌘V 先吞掉、开始计时")
+    r = m.handle(.vUp)
+    check(r.swallow && r.effects == [.cancelTimer, .postPaste] && m.state == .idle, "短按：照常粘贴")
+    _ = m.handle(down); r = m.handle(.cmdUp)
+    check(!r.swallow && r.effects.contains(.postPaste), "先松 ⌘ 也算短按")
+    check(!m.handle(.vDown(repeat: false, shift: false, cmd: true, otherMods: true)).swallow, "⌥⌘V、⌃⌘V 不管")
+    check(!m.handle(.vDown(repeat: false, shift: false, cmd: false, otherMods: false)).swallow, "单按 V 不管")
+    check(!m.handle(.vDown(repeat: false, shift: true, cmd: true, otherMods: false)).swallow && m.state == .idle, "⇧⌘V（打开侧栏）原样放过")
+    _ = m.handle(down)
+    check(m.handle(.vDown(repeat: true, shift: false, cmd: true, otherMods: false)).swallow, "按住时的连发吞掉")
+    r = m.handle(.timer)
+    check(r.effects == [.resolve] && m.state == .resolving, "按够时间：去算候选")
+    r = m.handle(.ready(0))
+    check(r.effects == [.postPaste] && m.state == .idle, "没有候选：照常粘贴")
+    _ = m.handle(down); _ = m.handle(.timer); r = m.handle(.ready(3))
+    check(r.effects == [.show] && m.state == .showing, "有候选：出候选条")
+    check(m.handle(.vUp).swallow, "出候选条后松开 V 不贴")
+    _ = m.handle(down); _ = m.handle(down)
+    check(m.index == 2, "再按 V 往后跳")
+    _ = m.handle(down)
+    check(m.index == 0, "跳到头回到第一个")
+    _ = m.handle(.vDown(repeat: false, shift: true, cmd: true, otherMods: false))
+    check(m.index == 2, "⇧V 往回")
+    check(m.handle(.vDown(repeat: true, shift: false, cmd: true, otherMods: false)).effects.isEmpty && m.index == 2, "连发不跳")
+    r = m.handle(.cmdUp)
+    check(r.effects == [.choose(2)] && !r.swallow && m.state == .idle, "松开 ⌘ 贴高亮那条")
+    _ = m.handle(down); _ = m.handle(.timer); _ = m.handle(.ready(3))
+    check(m.handle(.other(code: 53)).effects == [.cancel], "Esc 取消")
+    _ = m.handle(down); _ = m.handle(.timer); _ = m.handle(.ready(3))
+    check(m.handle(.other(code: 19)).effects == [.choose(1)], "数字键直接选")
+    _ = m.handle(down); _ = m.handle(.timer); _ = m.handle(.ready(3))
+    check(m.handle(.other(code: 125)).effects == [.expand], "↓ 展开")
+    _ = m.handle(down); _ = m.handle(.timer)
+    r = m.handle(.cmdUp)
+    check(r.effects == [.postPaste] && m.state == .idle, "候选还没算好就松手：照常粘贴")
+    check(m.handle(.ready(3)).effects.isEmpty && m.state == .idle, "晚到的候选不出来")
+}
+
+// 保留时间：贴过的续期，「不限」
+do {
+    let vault = try Vault.open()
+    let st = try Store(vault: vault)
+    st.settings.retentionDays = 30
+    var c = Item(kind: .clip, text: "续期测试", hash: "renew")
+    c.expiresAt = Date().addingTimeInterval(86400)
+    st.save(c)
+    st.recordUse(c.id, app: nil)
+    check((st.items[c.id]?.expiresAt ?? .distantPast) > Date().addingTimeInterval(29 * 86400), "贴过一次重新算保留时间")
+    var sk = Item(kind: .clip, ctype: .secret, text: fake, hash: "renew-secret")
+    sk.expiresAt = Date().addingTimeInterval(600); sk.sensitive = true
+    st.save(sk)
+    st.recordUse(sk.id, app: nil)
+    check((st.items[sk.id]?.expiresAt ?? .distantFuture) < Date().addingTimeInterval(3600), "密钥贴过也不续")
+    var forever = Item(kind: .clip, text: "不限时留下的", createdAt: Date().addingTimeInterval(-40 * 86400), hash: "forever")
+    forever.expiresAt = nil
+    st.save(forever)
+    st.settings.retentionDays = 0
+    _ = st.purgeExpired()
+    check(st.items[forever.id] != nil, "不限：不清")
+    st.settings.retentionDays = 30
+    _ = st.purgeExpired()
+    check(st.items[forever.id] == nil, "改回 30 天：按复制那天算，过期的清掉")
+    check(Settings().maxClips == 3000, "默认最多 3000 条")
+}
+
+// 从 Paste 搬家：Core Data 字段的几种存法
+do {
+    let items: [[String: Any]] = [["types": ["public.utf8-plain-text", "public.html"],
+                                   "dataByType": ["public.utf8-plain-text": Data("从 Paste 来的".utf8), "public.html": Data("<b>x</b>".utf8)]]]
+    let plist = try PropertyListSerialization.data(fromPropertyList: items, format: .binary, options: 0)
+    let ext = FileManager.default.temporaryDirectory
+    check(PasteImporter.decode(Data([1]) + plist, external: ext)?.count == 1, "内嵌的 bplist")
+    let lz = try (plist as NSData).compressed(using: .lzfse) as Data
+    check(PasteImporter.decode(Data([1]) + lz, external: ext)?.count == 1, "LZFSE 压过的")
+    let json = try JSONSerialization.data(withJSONObject: [["types": ["public.utf8-plain-text"], "dataByType": ["public.utf8-plain-text": Data("json 的".utf8).base64EncodedString()]]])
+    let z = try (json as NSData).compressed(using: .zlib) as Data
+    let dj = PasteImporter.decode(Data([1]) + z, external: ext)
+    check(dj?.count == 1, "deflate 压过的 JSON")
+    let uuid = UUID().uuidString
+    try plist.write(to: ext.appendingPathComponent(uuid))
+    check(PasteImporter.decode(Data([2]) + Data(uuid.utf8) + Data([0]), external: ext)?.count == 1, "存在外部文件里的")
+    var e = PasteImporter.Entry(created: Date(), used: Date())
+    PasteImporter.fill(&e, from: items)
+    check(e.text == "从 Paste 来的" && e.html == "<b>x</b>", "取出文字和富文本")
+    var e2 = PasteImporter.Entry(created: Date(), used: Date())
+    PasteImporter.fill(&e2, from: dj ?? [])
+    check(e2.text == "json 的", "JSON 里的 base64")
+
+    let vault = try Vault.open()
+    let st = try Store(vault: vault)
+    st.settings.retentionDays = 30
+    let before = st.items.count
+    var board = PasteImporter.Entry(text: "常用回复：收到，马上处理", created: Date(), used: Date().addingTimeInterval(-86400)); board.board = "常用"
+    let hist = PasteImporter.Entry(text: "一条历史", app: "Safari", created: Date(), used: Date().addingTimeInterval(-3 * 86400))
+    let sec = PasteImporter.Entry(text: fake, created: Date(), used: Date())
+    let res = PasteImporter.importInto(st, entries: [board, hist, sec], pngOf: { $0 })
+    check(res.clips == 1 && res.kept == 1 && res.secrets == 1, "历史进最近复制、Pinboard 进抽屉、整条密钥不搬（\(res)）")
+    check(st.kept.contains { k in k.text.hasPrefix("常用回复") && st.folders.first { f in f.id == k.folderId }?.name == "常用" }, "Pinboard 变成同名文件夹")
+    let h = st.clips.first { $0.text == "一条历史" }
+    check(h?.origin == .imported && h?.sourceApp == "Safari" && (h?.expiresAt ?? .distantPast) > Date().addingTimeInterval(29 * 86400), "搬来的历史从今天起算保留时间")
+    let again = PasteImporter.importInto(st, entries: [board, hist], pngOf: { $0 })
+    check(again.clips == 0 && again.kept == 0 && st.items.count == before + 2, "再搬一次不重复")
+}
+
 if ProcessInfo.processInfo.environment["REACH_IMPORT_STATS"] == "1", let url = SideNotesImporter.available {
     let st = try! Store(vault: try! Vault.open())
     let r = SideNotesImporter.importInto(st, from: url)

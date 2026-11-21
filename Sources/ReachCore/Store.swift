@@ -101,10 +101,14 @@ public final class Store {
 
     /// 清掉过期的复制记录；常用的（贴过三次以上且两个月内用过）不清。返回清掉的条数。
     @discardableResult
-    public func purgeExpired(now: Date = Date(), maxClips: Int = 3000) -> Int {
+    public func purgeExpired(now: Date = Date(), maxClips: Int? = nil) -> Int {
+        let maxClips = maxClips ?? settings.maxClips
         var dead: [String] = []
+        let days = settings.retentionDays
         for it in items.values where it.kind != .kept {
-            guard let e = it.expiresAt, e < now else { continue }
+            // 「不限」时记下的没有到期时间；改回按天数后，从复制那天算
+            let e = it.expiresAt ?? (it.kind == .clip && days > 0 ? it.createdAt.addingTimeInterval(Double(days) * 86400) : nil)
+            guard let e, e < now else { continue }
             if it.kind == .clip, !it.sensitive, Store.isCommon(it, now: now) { continue }
             dead.append(it.id)
         }
@@ -134,6 +138,11 @@ public final class Store {
         it.useCount += 1
         it.lastUsedAt = Date()
         if let a = app { it.useByApp[a, default: 0] += 1 }
+        // 和 Paste 一样：贴过一次就重新算保留时间（密钥类不续）
+        if it.kind == .clip, !it.sensitive, it.ctype != .secret, let e = it.expiresAt {
+            let days = settings.retentionDays
+            it.expiresAt = days == 0 ? nil : max(e, Date().addingTimeInterval(Double(days) * 86400))
+        }
         save(it)
     }
 

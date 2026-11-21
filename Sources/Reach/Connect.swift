@@ -130,6 +130,16 @@ struct SettingsView: View {
 
     init(model: AppModel) { self.model = model; _s = State(initialValue: model.settings) }
 
+    /// 保留天数的选项（以前用步进器调过的奇怪天数也留着）
+    static func retentionChoices(_ cur: Int) -> [Int] {
+        let base = [1, 7, 30, 90, 180, 365, 0]
+        return base.contains(cur) ? base : (base.dropLast() + [cur]).sorted() + [0]
+    }
+    static func retentionLabel(_ d: Int) -> String {
+        switch d { case 0: return "不限"; case 1: return "1 天"; case 7: return "1 周"; case 30: return "1 个月"; case 90: return "3 个月"
+        case 180: return "半年"; case 365: return "1 年"; default: return "\(d) 天" }
+    }
+
     private let presets: [(String, String, String)] = [
         ("Ollama（本机，不出电脑）", "http://127.0.0.1:11434/v1", "qwen2.5:7b"),
         ("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
@@ -144,8 +154,20 @@ struct SettingsView: View {
             }
             Section("记录") {
                 Toggle("暂停记录复制的内容", isOn: $s.paused)
-                Stepper("复制历史保留 \(s.retentionDays) 天", value: $s.retentionDays, in: 1...180)
+                Picker("复制历史保留", selection: $s.retentionDays) {
+                    ForEach(Self.retentionChoices(s.retentionDays), id: \.self) { d in Text(Self.retentionLabel(d)).tag(d) }
+                }
+                Text("贴过的会重新算时间；贴过三次以上的常用内容不清。抽屉里的永远不清。").font(.caption).foregroundStyle(.secondary)
                 Stepper("复制到的密钥 \(s.secretClipMinutes) 分钟后清除", value: $s.secretClipMinutes, in: 5...720, step: 5)
+            }
+            Section("就地候选") {
+                Toggle("长按 ⌘V 在光标旁出候选", isOn: $s.holdPaste)
+                Text("短按 ⌘V 照常粘贴。按住不放，光标旁出最近复制和抽屉里对得上的几条：再按 V 换下一个，松开 ⌘ 就贴；数字键直接选，↓ 展开搜索，Esc 取消。需要辅助功能权限；密码框开着安全输入时系统不让拦按键，照常粘贴。").font(.caption).foregroundStyle(.secondary)
+                if s.holdPaste {
+                    Picker("按住多久算长按", selection: $s.holdDelay) {
+                        ForEach([0.2, 0.3, 0.4, 0.5, 0.6], id: \.self) { d in Text(String(format: "%.1f 秒", d)).tag(d) }
+                    }
+                }
             }
             Section("侧栏") {
                 Toggle("屏幕边上露一个小把手", isOn: $s.edgeHandle)
@@ -218,6 +240,7 @@ struct SettingsView: View {
                 app.panelController.refreshHandles()
                 if new.launchAtLogin != LoginItem.enabled { LoginItem.set(new.launchAtLogin) }
                 if let a = app.appliedKeys, a.0 != new.panelKey || a.1 != new.shotKey || a.2 != new.shotHotkey { app.applyHotkeys() }
+                app.syncInline()
             }
         }
     }

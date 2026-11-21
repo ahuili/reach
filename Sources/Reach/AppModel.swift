@@ -109,6 +109,11 @@ final class AppModel: ObservableObject {
     @Published var targetName = ""
     @Published var banner: String?
     @Published var busy: String?
+    /// 按顺序贴还剩几条（0 = 没在按顺序贴）
+    @Published var sequenceLeft = 0
+    /// 测试模式里就地候选选中的那条（不真贴）
+    var lastInlinePick: String?
+    var inline: InlinePaster!
     var targetBundle: String?
     var expandedGroups: Set<String> = []
     var collapsedGroups: Set<String> = []

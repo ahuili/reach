@@ -25,7 +25,9 @@ final class Organizer {
             guard let d = store.loadImage(f), let img = NSImage(data: d), let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
             let req = VNRecognizeTextRequest()
             req.recognitionLevel = .accurate
-            req.recognitionLanguages = ["zh-Hans", "en-US"]
+            // 只给中英两种时日文、韩文一个字都认不出；打开自动识别后四种都能认，中文不受影响（实测）
+        req.recognitionLanguages = ["zh-Hans", "en-US", "ja-JP", "ko-KR"]
+        req.automaticallyDetectsLanguage = true
             req.usesLanguageCorrection = true
             try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
             let text = (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
