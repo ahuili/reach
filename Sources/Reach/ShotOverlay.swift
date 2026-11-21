@@ -29,6 +29,7 @@ final class ShotController {
     private var barWatch: AnyCancellable?
     var cardWatch: AnyCancellable?
     private var busy = false
+    private var grabAttempt: UUID?
 
     init(model: AppModel, monitor: ClipboardMonitor) { self.model = model; self.monitor = monitor }
 
@@ -42,10 +43,19 @@ final class ShotController {
         if prevApp?.bundleIdentifier == Bundle.main.bundleIdentifier { prevApp = nil }
         model.hidePanel()
         busy = true
+        let attempt = UUID()
+        grabAttempt = attempt
+        // 系统截屏偶尔会卡住不返回：8 秒还没好就放弃这一次，免得快捷键从此没反应
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.grabAttempt == attempt, self.busy else { return }
+            self.busy = false; self.grabAttempt = nil
+            self.model.toast("截屏没响应，再按一次试试")
+        }
         Task { @MainActor in
-            defer { self.busy = false }
+            defer { if self.grabAttempt == attempt { self.busy = false; self.grabAttempt = nil } }
             do {
                 let shots = try await ShotGrab.freeze()
+                guard self.grabAttempt == attempt else { return } // 已经超时放弃了
                 guard !shots.isEmpty else { self.model.toast("没拿到屏幕画面"); return }
                 self.open(frozen: shots, windows: ShotGrab.windows())
             } catch {
@@ -221,6 +231,7 @@ final class ShotController {
         let g = CGPoint(x: v.screenFrame.minX + p.x, y: v.screenFrame.maxY - p.y)
         guard let w = windows.first(where: { $0.rect.contains(g) }) else { return nil }
         let r = w.rect.intersection(v.screenFrame)
+        guard r.isUsable else { return nil }
         return CGRect(x: r.minX - v.screenFrame.minX, y: v.screenFrame.maxY - r.maxY, width: r.width, height: r.height)
     }
 
@@ -482,8 +493,9 @@ final class ShotView: NSView {
     weak var owner: ShotController?
     var screenFrame: CGRect = .zero
     var phase: Phase = .selecting
-    var selection: CGRect?
-    var hover: CGRect?
+    /// 选区、悬停框：空的、无穷大的一律当没有（画圆角框时会直接让 App 崩掉）
+    var selection: CGRect? { didSet { if let s = selection, !s.isUsable { selection = nil } } }
+    var hover: CGRect? { didSet { if let h = hover, !h.isUsable { hover = nil } } }
     var dimOthers = false { didSet { needsDisplay = true } }
     private var start: CGPoint?
     private var tracking: NSTrackingArea?
@@ -537,7 +549,7 @@ final class ShotView: NSView {
             NSImage(cgImage: f.image, size: bounds.size).draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
         }
         let dim = NSColor.black.withAlphaComponent(frozen == nil ? 0.62 : (dimOthers ? 0.5 : 0.38))
-        let hole = phase == .editing ? selection : (selection ?? hover)
+        let hole = (phase == .editing ? selection : (selection ?? hover)).flatMap { $0.isUsable ? $0 : nil }
         let path = NSBezierPath(rect: bounds)
         if let h = hole { path.append(NSBezierPath(rect: h)); path.windingRule = .evenOdd }
         dim.setFill(); path.fill()
@@ -585,7 +597,10 @@ final class ShotView: NSView {
 
     override func mouseMoved(with e: NSEvent) {
         guard phase == .selecting, start == nil else { return }
-        hover = owner?.windowRect(at: local(e), in: self)
+        // 多块屏时，鼠标在别的屏上也会把移动事件发到这块屏的窗口：不在自己范围里就不管
+        let p = local(e)
+        guard bounds.contains(p) else { if hover != nil { hover = nil; needsDisplay = true }; return }
+        hover = owner?.windowRect(at: p, in: self)
         needsDisplay = true
     }
 
@@ -610,7 +625,8 @@ final class ShotView: NSView {
             if g.r { r.size.width = max(8, p.x - r.minX) }
             if g.t { r = CGRect(x: r.minX, y: min(p.y, r.maxY - 8), width: r.width, height: r.maxY - min(p.y, r.maxY - 8)) }
             if g.b { r.size.height = max(8, p.y - r.minY) }
-            selection = r.intersection(bounds)
+            let clipped = r.intersection(bounds)
+            if clipped.isUsable, clipped.width >= 4, clipped.height >= 4 { selection = clipped }
             needsDisplay = true
             return
         }
@@ -813,3 +829,8 @@ struct ShotBar: View {
 
 /// 应用名太长就截一下
 private func shortName(_ s: String) -> String { s.count > 8 ? String(s.prefix(7)) + "…" : s }
+
+extension CGRect {
+    /// 能拿来画、拿来裁的框：不是空的（null）、不是无穷大、坐标都是有限数
+    var isUsable: Bool { !isNull && !isInfinite && origin.x.isFinite && origin.y.isFinite && width.isFinite && height.isFinite }
+}
